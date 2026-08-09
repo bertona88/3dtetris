@@ -10,9 +10,9 @@ mode is implemented.
 - The current prototype provides a 5 x 5 x 9 falling-block grid, front/top/side
   projections, touch dragging, piece rotation, hard drop, scoring, layer
   clearing, pause/restart, and a responsive mobile interface.
-- Device-orientation camera control and radial-gravity spherical packing are not
-  implemented. Do not claim otherwise in UI, documentation, release notes, or
-  WOFI metadata.
+- Device-orientation camera control and radial-gravity spherical packing are
+  implemented in the reconciled release. Keep claims limited to browser-tested
+  behavior: orientation access still depends on device and browser permission.
 - Use the independent product identity **3D Blocks**. Tetris may be mentioned
   only as the historical gameplay ancestor, not as the product name, branding,
   or an affiliation claim.
