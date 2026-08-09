@@ -2,6 +2,7 @@
   "name": "site-creator-vinext-starter",
   "version": "0.1.0",
   "private": true,
+  "license": "https://wofi.ai/ideas/sha256%3Ac472014b92b2e4c50702ad044544f964707a78157100c5e79ce161bc01eca510",
   "engines": {
     "node": ">=22.13.0"
   },

@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 const title = "3D Blocks";
-const description = "Un puzzle 3D mobile controllato con swipe e trascinamento.";
+const description = "A motion-controlled 3D block-stacking game with tower and radial-core gravity modes.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -49,10 +49,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="it">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+    <html lang="en">
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         {children}
       </body>
     </html>
