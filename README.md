@@ -1,14 +1,15 @@
-# Tetris 3D Swipe
+# Gravity Tetris 3D
 
-Prototipo mobile-first di un puzzle 3D ispirato a Tetris. I pezzi cadono in una griglia tridimensionale e possono essere controllati con trascinamento e swipe.
+Prototipo mobile-first di un puzzle 3D ispirato a Tetris. La camera segue l'inclinazione del dispositivo e il gioco offre due modelli di gravità.
 
 ## Funzioni
 
-- tre proiezioni ortogonali: fronte, alto e lato
-- swipe sullo sfondo per cambiare vista
-- trascinamento del pezzo nella griglia
-- rotazione e caduta rapida
-- livelli, punteggio, cancellazione degli strati e riavvio
+- modalità **Tower**, con gravità verticale e cancellazione degli strati
+- modalità **Core**, con attrazione tridimensionale verso il punto centrale
+- accumulo sferico senza limite fisso: il volume di gioco cresce con il nucleo
+- punteggio Core basato sulla densità del packing e sul raggio del cluster
+- camera controllata dall'accelerometro, con moltiplicatori e smoothing regolabili
+- movimento sui tre assi, rotazioni X/Y/Z, hard drop radiale e comandi tastiera
 - controlli touch e interfaccia responsive per cellulare
 
 ## Avvio locale

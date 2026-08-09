@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Tilt Tetris",
-  description: "A browser-based 3D Tetris game with an accelerometer-controlled camera.",
+  title: "Gravity Tetris",
+  description: "A browser-based 3D Tetris game with tilt-controlled views and radial core gravity.",
   other: {
     "codex-preview": "development",
   },
