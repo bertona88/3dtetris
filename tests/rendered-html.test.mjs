@@ -31,6 +31,7 @@ test("renders development preview metadata", async () => {
   );
   const html = await response.text();
   assert.match(html, developmentPreviewMeta);
-  assert.match(html, /TILT CAMERA/);
-  assert.doesNotMatch(html, /SWIPE EDITION|cambia proiezione/i);
+  assert.match(html, /MOTION READY/);
+  assert.match(html, /SWIPE.*MOVE/i);
+  assert.doesNotMatch(html, /dpad|piece-controls|ENABLE/i);
 });

@@ -51,8 +51,8 @@ button { color: inherit; }
 }
 
 .motion-bar {
-  min-height: 62px;
-  padding: 9px 10px 9px 13px;
+  min-height: 56px;
+  padding: 8px 9px 8px 13px;
   gap: 8px;
   border: 1px solid rgba(215, 255, 86, .24);
   background: linear-gradient(120deg, rgba(215, 255, 86, .08), rgba(20, 20, 26, .92) 45%);
@@ -63,6 +63,7 @@ button { color: inherit; }
 .motion-copy small { color: var(--muted); font-size: 8px; margin-top: 4px; white-space: nowrap; }
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: #686872; box-shadow: 0 0 0 4px rgba(104,104,114,.12); }
 .status-dot.active { background: var(--lime); box-shadow: 0 0 14px var(--lime); }
+.status-dot.starting { background: #ffc24b; box-shadow: 0 0 12px rgba(255, 194, 75, .55); }
 .status-dot.denied, .status-dot.unsupported { background: #ff6b79; }
 .motion-bar button {
   border: 1px solid var(--line);
@@ -86,6 +87,7 @@ button { color: inherit; }
 .motion-settings b { color: var(--lime); }
 .motion-settings input { width: 100%; margin-top: 8px; accent-color: var(--lime); }
 .motion-settings p { margin: 0; color: #ff9aa3; font-size: 9px; line-height: 1.5; }
+.motion-settings .recenter { justify-self: start; border: 1px solid rgba(215,255,86,.3); background: rgba(215,255,86,.08); color: var(--lime); padding: 9px 11px; font-size: 8px; font-weight: 900; letter-spacing: .12em; cursor: pointer; }
 
 .game-card {
   border: 1px solid var(--line);
@@ -102,8 +104,8 @@ button { color: inherit; }
 .canvas-wrap {
   position: relative;
   margin: 12px;
-  height: min(52dvh, 500px);
-  min-height: 365px;
+  height: min(64dvh, 620px);
+  min-height: 430px;
   background: linear-gradient(rgba(10,10,14,.16), rgba(10,10,14,.82)), radial-gradient(circle at 50% 43%, #252530, #101015 68%);
   border: 1px solid rgba(255, 255, 255, .08);
   overflow: hidden;
@@ -115,20 +117,15 @@ button { color: inherit; }
   background: linear-gradient(90deg, transparent 49.8%, rgba(255,255,255,.024) 50%, transparent 50.2%);
   pointer-events: none;
 }
-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+canvas:active { cursor: grabbing; }
 .axis-chip { position: absolute; top: 10px; right: 10px; border: 1px solid var(--line); background: #101015cc; color: #9a99a4; padding: 6px 8px; font: 700 8px monospace; letter-spacing: .13em; }
+.gesture-help { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line); background: rgba(11,11,15,.78); backdrop-filter: blur(5px); color: #888792; font-size: 7px; font-weight: 800; letter-spacing: .1em; pointer-events: none; white-space: nowrap; }
+.gesture-help span { color: var(--ink); }
+.gesture-help i { width: 1px; height: 12px; margin: 0 2px; background: var(--line); }
 .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 18px; background: rgba(7,7,10,.82); backdrop-filter: blur(5px); }
 .overlay strong { font-size: 27px; letter-spacing: .12em; }
 .overlay button { border: 0; background: var(--lime); color: #111; padding: 13px 24px; font-size: 10px; font-weight: 900; letter-spacing: .16em; cursor: pointer; }
-
-.piece-controls { padding: 0 12px 12px; display: grid; grid-template-columns: 1.5fr .8fr .8fr; gap: 9px; }
-.dpad { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-.dpad button, .action { min-height: 55px; border: 1px solid var(--line); background: #222229; font-size: 17px; font-weight: 900; cursor: pointer; box-shadow: inset 0 1px rgba(255,255,255,.05); }
-.dpad button:active, .action:active { transform: translateY(1px); background: #2b2b34; }
-.action small { display: block; font-size: 7px; letter-spacing: .12em; color: #888792; margin-top: 3px; }
-.action.rotate { color: var(--lime); border-color: rgba(215,255,86,.3); }
-.action.drop { background: var(--lime); color: #0c0d08; border-color: var(--lime); }
-.action.drop small { color: #31351d; }
 
 footer { gap: 12px; min-height: 43px; }
 footer > span { color: #777680; font-size: 8px; font-weight: 800; letter-spacing: .19em; }
@@ -143,10 +140,8 @@ footer button { margin-left: auto; border: 0; border-bottom: 1px solid #777680; 
 @media (max-width: 430px) {
   .game-shell { padding: 12px; gap: 10px; }
   .motion-copy small { max-width: 158px; overflow: hidden; text-overflow: ellipsis; }
-  .canvas-wrap { min-height: 330px; height: 47dvh; }
-  .piece-controls { grid-template-columns: 1fr 1fr; }
-  .dpad { grid-column: 1 / -1; }
+  .canvas-wrap { min-height: 390px; height: 59dvh; }
 }
-@media (max-height: 740px) { .canvas-wrap { min-height: 300px; height: 43dvh; } }
+@media (max-height: 740px) { .canvas-wrap { min-height: 330px; height: 51dvh; } }
 @media (min-width: 700px) { .game-shell { border-left: 1px solid #222228; border-right: 1px solid #222228; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }

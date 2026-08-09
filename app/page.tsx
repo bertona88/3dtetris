@@ -13,10 +13,20 @@ type Game = {
   paused: boolean;
   gameOver: boolean;
 };
-type MotionStatus = "idle" | "active" | "unsupported" | "denied";
+type MotionStatus = "starting" | "active" | "unsupported" | "denied";
 type OrientationSample = { beta: number; gamma: number };
 type Projected = { x: number; y: number; depth: number };
 type Face = { points: Projected[]; depth: number; color: string };
+type Camera = { yaw: number; pitch: number; targetYaw: number; targetPitch: number };
+type Gesture = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  distance: number;
+  startedAt: number;
+};
 
 const BOARD = 5;
 const HEIGHT = 10;
@@ -105,11 +115,32 @@ function shade(hex: string, amount: number) {
   return `rgb(${channel(16)}, ${channel(8)}, ${channel(0)})`;
 }
 
+function projectPoint(x: number, y: number, z: number, width: number, height: number, camera: Camera): Projected {
+  const scale = Math.min(width / 9.2, height / 14.5);
+  const centeredX = x - BOARD / 2;
+  const centeredY = y - HEIGHT / 2;
+  const centeredZ = z - BOARD / 2;
+  const cosYaw = Math.cos(camera.yaw);
+  const sinYaw = Math.sin(camera.yaw);
+  const yawX = centeredX * cosYaw - centeredZ * sinYaw;
+  const yawZ = centeredX * sinYaw + centeredZ * cosYaw;
+  const cosPitch = Math.cos(camera.pitch);
+  const sinPitch = Math.sin(camera.pitch);
+  const pitchY = centeredY * cosPitch - yawZ * sinPitch;
+  const pitchZ = centeredY * sinPitch + yawZ * cosPitch;
+  const perspective = 12 / (12 - pitchZ * 0.25);
+  return {
+    x: width / 2 + yawX * scale * perspective,
+    y: height * 0.53 - pitchY * scale * perspective,
+    depth: pitchZ,
+  };
+}
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [game, setGame] = useState<Game>(initialGame);
   const gameRef = useRef(game);
-  const [motionStatus, setMotionStatus] = useState<MotionStatus>("idle");
+  const [motionStatus, setMotionStatus] = useState<MotionStatus>("starting");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [xMultiplier, setXMultiplier] = useState(1);
   const [yMultiplier, setYMultiplier] = useState(0.8);
@@ -117,7 +148,8 @@ export default function Home() {
   const settingsReady = useRef(false);
   const baseline = useRef<OrientationSample | null>(null);
   const latestSample = useRef<OrientationSample | null>(null);
-  const camera = useRef({ yaw: -0.62, pitch: 0.38, targetYaw: -0.62, targetPitch: 0.38 });
+  const camera = useRef<Camera>({ yaw: -0.62, pitch: 0.38, targetYaw: -0.62, targetPitch: 0.38 });
+  const gesture = useRef<Gesture | null>(null);
 
   useEffect(() => { gameRef.current = game; }, [game]);
 
@@ -146,6 +178,21 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      if (!("DeviceOrientationEvent" in window)) {
+        setMotionStatus("unsupported");
+        return;
+      }
+      type PermissionOrientationEvent = typeof DeviceOrientationEvent & {
+        requestPermission?: () => Promise<"granted" | "denied">;
+      };
+      const OrientationEvent = DeviceOrientationEvent as PermissionOrientationEvent;
+      setMotionStatus(OrientationEvent.requestPermission ? "starting" : "active");
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
     if (motionStatus !== "active") return;
     const onOrientation = (event: DeviceOrientationEvent) => {
       if (event.beta == null || event.gamma == null) return;
@@ -160,7 +207,8 @@ export default function Home() {
     return () => window.removeEventListener("deviceorientation", onOrientation, true);
   }, [motionStatus, xMultiplier, yMultiplier]);
 
-  const enableMotion = useCallback(async () => {
+  const activateMotion = useCallback(async () => {
+    if (motionStatus === "active" || motionStatus === "unsupported") return;
     if (!("DeviceOrientationEvent" in window)) {
       setMotionStatus("unsupported");
       return;
@@ -182,7 +230,7 @@ export default function Home() {
     } catch {
       setMotionStatus("denied");
     }
-  }, []);
+  }, [motionStatus]);
 
   const move = useCallback((dx: number, dz: number) => {
     setGame((current) => {
@@ -204,6 +252,74 @@ export default function Home() {
       return isValid(cubes, current.settled) ? { ...current, active: { ...current.active, cubes } } : current;
     });
   }, []);
+
+  const moveFromScreenVector = useCallback((screenX: number, screenY: number) => {
+    const canvas = canvasRef.current;
+    const current = gameRef.current;
+    if (!canvas || current.paused || current.gameOver) return;
+    const rect = canvas.getBoundingClientRect();
+    const center = current.active.cubes.reduce((sum, cube) => ({
+      x: sum.x + (cube.x + 0.5) / current.active.cubes.length,
+      y: sum.y + (cube.y + 0.5) / current.active.cubes.length,
+      z: sum.z + (cube.z + 0.5) / current.active.cubes.length,
+    }), { x: 0, y: 0, z: 0 });
+    const origin = projectPoint(center.x, center.y, center.z, rect.width, rect.height, camera.current);
+    const length = Math.hypot(screenX, screenY) || 1;
+    const candidates = [
+      { dx: 1, dz: 0 },
+      { dx: -1, dz: 0 },
+      { dx: 0, dz: 1 },
+      { dx: 0, dz: -1 },
+    ].map((candidate) => {
+      const target = projectPoint(center.x + candidate.dx, center.y, center.z + candidate.dz, rect.width, rect.height, camera.current);
+      const axisX = target.x - origin.x;
+      const axisY = target.y - origin.y;
+      const axisLength = Math.hypot(axisX, axisY) || 1;
+      return {
+        ...candidate,
+        score: (screenX * axisX + screenY * axisY) / (length * axisLength),
+      };
+    });
+    const best = candidates.sort((a, b) => b.score - a.score)[0];
+    move(best.dx, best.dz);
+  }, [move]);
+
+  const onPointerDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    void activateMotion();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    gesture.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      distance: 0,
+      startedAt: performance.now(),
+    };
+  }, [activateMotion]);
+
+  const onPointerMove = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    const current = gesture.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    const dx = event.clientX - current.lastX;
+    const dy = event.clientY - current.lastY;
+    const delta = Math.hypot(dx, dy);
+    current.distance = Math.max(current.distance, Math.hypot(event.clientX - current.startX, event.clientY - current.startY));
+    if (delta >= 34) {
+      const steps = Math.min(3, Math.floor(delta / 34));
+      for (let step = 0; step < steps; step += 1) moveFromScreenVector(dx, dy);
+      current.lastX = event.clientX;
+      current.lastY = event.clientY;
+    }
+  }, [moveFromScreenVector]);
+
+  const finishGesture = useCallback((event: React.PointerEvent<HTMLCanvasElement>, cancelled = false) => {
+    const current = gesture.current;
+    if (!current || current.pointerId !== event.pointerId) return;
+    gesture.current = null;
+    if (!cancelled && current.distance < 14 && performance.now() - current.startedAt < 420) rotatePiece();
+  }, [rotatePiece]);
 
   const hardDrop = useCallback(() => {
     setGame((current) => {
@@ -266,27 +382,8 @@ export default function Home() {
       const motion = camera.current;
       motion.yaw += (motion.targetYaw - motion.yaw) * smoothing;
       motion.pitch += (motion.targetPitch - motion.pitch) * smoothing;
-      const scale = Math.min(width / 9.2, height / 14.5);
-      const centerY = height * 0.53;
-
       const project = (x: number, y: number, z: number): Projected => {
-        const centeredX = x - BOARD / 2;
-        const centeredY = y - HEIGHT / 2;
-        const centeredZ = z - BOARD / 2;
-        const cosYaw = Math.cos(motion.yaw);
-        const sinYaw = Math.sin(motion.yaw);
-        const yawX = centeredX * cosYaw - centeredZ * sinYaw;
-        const yawZ = centeredX * sinYaw + centeredZ * cosYaw;
-        const cosPitch = Math.cos(motion.pitch);
-        const sinPitch = Math.sin(motion.pitch);
-        const pitchY = centeredY * cosPitch - yawZ * sinPitch;
-        const pitchZ = centeredY * sinPitch + yawZ * cosPitch;
-        const perspective = 12 / (12 - pitchZ * 0.25);
-        return {
-          x: width / 2 + yawX * scale * perspective,
-          y: centerY - pitchY * scale * perspective,
-          depth: pitchZ,
-        };
+        return projectPoint(x, y, z, width, height, motion);
       };
 
       context.lineWidth = 1;
@@ -344,19 +441,19 @@ export default function Home() {
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark">T³</span>
-          <div><strong>TILT TETRIS</strong><small>MOTION EDITION</small></div>
+          <div><strong>TILT TETRIS</strong><small>GESTURE EDITION</small></div>
         </div>
         <button className="icon-btn" onClick={togglePause} aria-label={game.paused ? "Resume" : "Pause"}>{game.paused ? "▶" : "Ⅱ"}</button>
       </header>
 
-      <section className="motion-bar" aria-label="Tilt camera controls">
+      <section className="motion-bar" aria-label="Motion camera status">
         <div className="motion-copy">
           <span className={`status-dot ${motionStatus}`} />
-          <div><strong>{motionStatus === "active" ? "TILT ACTIVE" : "TILT CAMERA"}</strong><small>{motionStatus === "active" ? "Move your phone to rotate the view" : "No camera swiping"}</small></div>
+          <div>
+            <strong>{motionStatus === "active" ? "CAMERA LIVE" : motionStatus === "starting" ? "MOTION READY" : "MOTION OFF"}</strong>
+            <small>{motionStatus === "active" ? "Tilt your phone — the controls follow the view" : motionStatus === "starting" ? "Touch the playfield once to connect motion" : motionStatus === "denied" ? "Allow motion in browser settings, then tap" : "Motion sensors are unavailable"}</small>
+          </div>
         </div>
-        {motionStatus === "active"
-          ? <button onClick={recenter}>RECENTER</button>
-          : <button onClick={enableMotion}>{motionStatus === "denied" ? "TRY AGAIN" : "ENABLE"}</button>}
         <button className="settings-toggle" onClick={() => setSettingsOpen((open) => !open)} aria-expanded={settingsOpen} aria-label="Motion settings">⚙</button>
       </section>
 
@@ -365,6 +462,7 @@ export default function Home() {
           <label><span>Horizontal multiplier <b>{xMultiplier.toFixed(1)}×</b></span><input type="range" min="0.2" max="2.5" step="0.1" value={xMultiplier} onChange={(event) => setXMultiplier(Number(event.target.value))} /></label>
           <label><span>Vertical multiplier <b>{yMultiplier.toFixed(1)}×</b></span><input type="range" min="0.2" max="2.5" step="0.1" value={yMultiplier} onChange={(event) => setYMultiplier(Number(event.target.value))} /></label>
           <label><span>Smoothing <b>{Math.round(smoothing * 100)}%</b></span><input type="range" min="0.06" max="0.42" step="0.02" value={smoothing} onChange={(event) => setSmoothing(Number(event.target.value))} /></label>
+          <button className="recenter" onClick={recenter}>RECENTER CAMERA</button>
           {(motionStatus === "unsupported" || motionStatus === "denied") && <p>{motionStatus === "unsupported" ? "Motion sensors are unavailable here. The game still works with a fixed view." : "Motion access was blocked. Allow motion access in your browser settings, then try again."}</p>}
         </section>
       )}
@@ -377,8 +475,17 @@ export default function Home() {
         </div>
 
         <div className="canvas-wrap">
-          <canvas ref={canvasRef} aria-label="3D Tetris board. Camera rotation follows device tilt." />
-          <div className="axis-chip">GYRO VIEW</div>
+          <canvas
+            ref={canvasRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={(event) => finishGesture(event)}
+            onPointerCancel={(event) => finishGesture(event, true)}
+            aria-label="3D Tetris board. Swipe anywhere to move the active piece. Tap to rotate it. Camera rotation follows device tilt."
+            aria-describedby="gesture-help"
+          />
+          <div className="axis-chip">LIVE 3D</div>
+          <div className="gesture-help" id="gesture-help"><span>SWIPE</span> MOVE <i /> <span>TAP</span> ROTATE</div>
           {(game.paused || game.gameOver) && (
             <div className="overlay">
               <strong>{game.gameOver ? "TOWER FULL" : "PAUSED"}</strong>
@@ -387,16 +494,6 @@ export default function Home() {
           )}
         </div>
 
-        <div className="piece-controls" aria-label="Piece controls">
-          <div className="dpad">
-            <button onClick={() => move(0, -1)} aria-label="Move piece away">▲</button>
-            <button onClick={() => move(-1, 0)} aria-label="Move piece left">◀</button>
-            <button onClick={() => move(0, 1)} aria-label="Move piece closer">▼</button>
-            <button onClick={() => move(1, 0)} aria-label="Move piece right">▶</button>
-          </div>
-          <button onClick={rotatePiece} className="action rotate" aria-label="Rotate piece">↻<small>ROTATE</small></button>
-          <button onClick={hardDrop} className="action drop" aria-label="Drop piece">↓<small>DROP</small></button>
-        </div>
       </section>
 
       <footer>
