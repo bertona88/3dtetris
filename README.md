@@ -1,6 +1,6 @@
-# Tetris 3D Swipe
+# 3D Blocks
 
-Prototipo mobile-first di un puzzle 3D ispirato a Tetris. I pezzi cadono in una griglia tridimensionale e possono essere controllati con trascinamento e swipe.
+Prototipo mobile-first di un puzzle 3D di blocchi cadenti, con Tetris citato come antenato storico del gameplay e un'identita visiva indipendente. I pezzi cadono in una griglia tridimensionale e possono essere controllati con trascinamento e swipe.
 
 ## Funzioni
 
@@ -26,4 +26,4 @@ Apri l'indirizzo indicato dal server di sviluppo.
 npm run build
 ```
 
-Versione online: https://tetris-3d-swipe.abertoncini.chatgpt.site
+Versione online: https://3dblocks.wofi.ai

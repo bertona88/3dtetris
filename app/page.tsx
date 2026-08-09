@@ -197,7 +197,7 @@ export default function Home() {
   return (
     <main className="game-shell">
       <header className="topbar">
-        <div className="brand"><span className="brand-mark">T³</span><div><strong>TETRIS³</strong><small>SWIPE EDITION</small></div></div>
+        <div className="brand"><span className="brand-mark">3D</span><div><strong>3D BLOCKS</strong><small>SWIPE EDITION</small></div></div>
         <button className="icon-btn" onClick={() => setPaused(v => !v)} aria-label={paused ? "Riprendi" : "Pausa"}>{paused ? "▶" : "Ⅱ"}</button>
       </header>
 

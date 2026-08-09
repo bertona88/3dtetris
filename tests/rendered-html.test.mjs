@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
-
-test("renders development preview metadata", async () => {
+test("renders production metadata", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   const response = await worker.fetch(
     new Request("http://localhost/", {
-      headers: { accept: "text/html" },
+      headers: {
+        accept: "text/html",
+        "x-forwarded-host": "preview.example",
+        "x-forwarded-proto": "https",
+      },
     }),
     {
       ASSETS: {
@@ -29,5 +30,8 @@ test("renders development preview metadata", async () => {
     response.headers.get("content-type") ?? "",
     /^text\/html\b/i,
   );
-  assert.match(await response.text(), developmentPreviewMeta);
+  const html = await response.text();
+  assert.match(html, /<title>3D Blocks<\/title>/i);
+  assert.match(html, /<meta[^>]+property=["']og:image["'][^>]+content=["']https:\/\/preview\.example\/og\.png["']/i);
+  assert.doesNotMatch(html, /codex-preview/i);
 });
