@@ -38,6 +38,8 @@ type Gesture = {
   distance: number;
   startedAt: number;
 };
+type JoystickName = "move" | "action";
+type JoystickVector = { x: number; y: number };
 
 const TOWER_BOARD = 5;
 const PATCH_BOARD = 9;
@@ -79,6 +81,10 @@ const pieceDistance = (piece: Piece) => piece.cubes.reduce((sum, cube) => sum + 
 const randomShapeIndex = () => Math.floor(Math.random() * SHAPES.length);
 const isBoundedMode = (mode: Mode) => mode !== "core";
 const boardSizeForMode = (mode: Mode) => mode === "patch" ? PATCH_BOARD : TOWER_BOARD;
+const idleJoystick = (): Record<JoystickName, JoystickVector> => ({
+  move: { x: 0, y: 0 },
+  action: { x: 0, y: 0 },
+});
 
 function quaternionNormalize(q: Quaternion): Quaternion {
   const length = Math.hypot(q.x, q.y, q.z, q.w) || 1;
@@ -459,6 +465,11 @@ export default function Game() {
     targetOrientation: { ...DEFAULT_CAMERA_ORIENTATION },
   });
   const gesture = useRef<Gesture | null>(null);
+  const [joystickPosition, setJoystickPosition] = useState(idleJoystick);
+  const joystickVectors = useRef(idleJoystick());
+  const joystickPointers = useRef<Record<JoystickName, number | null>>({ move: null, action: null });
+  const joystickTimers = useRef<Record<JoystickName, number | null>>({ move: null, action: null });
+  const joystickTicks = useRef<Record<JoystickName, number>>({ move: 0, action: 0 });
 
   useEffect(() => { gameRef.current = game; }, [game]);
 
@@ -570,18 +581,22 @@ export default function Game() {
     });
   }, []);
 
-  const rotatePiece = useCallback((axis: Axis = "y") => {
+  const rotatePiece = useCallback((axis: Axis = "y", direction: 1 | -1 = 1) => {
     setGame((current) => {
       if (current.paused || current.gameOver) return current;
       const pivot = current.active.cubes[0];
-      const cubes = current.active.cubes.map((cube) => {
-        const dx = cube.x - pivot.x;
-        const dy = cube.y - pivot.y;
-        const dz = cube.z - pivot.z;
-        if (axis === "x") return { ...cube, y: pivot.y - dz, z: pivot.z + dy };
-        if (axis === "z") return { ...cube, x: pivot.x - dy, y: pivot.y + dx };
-        return { ...cube, x: pivot.x - dz, z: pivot.z + dx };
-      });
+      let cubes = current.active.cubes;
+      const turns = direction === 1 ? 1 : 3;
+      for (let turn = 0; turn < turns; turn += 1) {
+        cubes = cubes.map((cube) => {
+          const dx = cube.x - pivot.x;
+          const dy = cube.y - pivot.y;
+          const dz = cube.z - pivot.z;
+          if (axis === "x") return { ...cube, y: pivot.y - dz, z: pivot.z + dy };
+          if (axis === "z") return { ...cube, x: pivot.x - dy, y: pivot.y + dx };
+          return { ...cube, x: pivot.x - dz, z: pivot.z + dx };
+        });
+      }
       const kicked = findWallKickedRotation(cubes, axis, (candidate) => isValidForGame(current, candidate));
       return kicked ? { ...current, active: { ...current.active, cubes: kicked } } : current;
     });
@@ -636,7 +651,7 @@ export default function Game() {
     move(best.direction.x, best.direction.y, best.direction.z);
   }, [move]);
 
-  const rotateFromCamera = useCallback(() => {
+  const rotateFromCamera = useCallback((direction: 1 | -1 = 1) => {
     const axes: Array<{ axis: Axis; vector: Vector }> = [
       { axis: "x", vector: { x: 1, y: 0, z: 0 } },
       { axis: "y", vector: { x: 0, y: 1, z: 0 } },
@@ -645,8 +660,91 @@ export default function Game() {
     const axis = axes
       .map((candidate) => ({ ...candidate, depth: Math.abs(projectDirection(candidate.vector, camera.current).depth) }))
       .sort((a, b) => b.depth - a.depth)[0].axis;
-    rotatePiece(axis);
+    rotatePiece(axis, direction);
   }, [rotatePiece]);
+
+  const actOnJoystick = useCallback((name: JoystickName, vector: JoystickVector, immediate = false) => {
+    const length = Math.hypot(vector.x, vector.y);
+    if (length < 0.34) return;
+    const x = vector.x / length;
+    const y = vector.y / length;
+    if (name === "move") {
+      moveFromScreenVector(x, y);
+      return;
+    }
+    if (Math.abs(y) >= Math.abs(x)) {
+      move(0, y < 0 ? 1 : -1, 0);
+      return;
+    }
+    if (immediate || joystickTicks.current.action % 3 === 0) {
+      rotateFromCamera(x < 0 ? -1 : 1);
+    }
+  }, [move, moveFromScreenVector, rotateFromCamera]);
+
+  const updateJoystick = useCallback((name: JoystickName, event: React.PointerEvent<HTMLButtonElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const radius = Math.max(1, Math.min(bounds.width, bounds.height) * 0.34);
+    const rawX = (event.clientX - (bounds.left + bounds.width / 2)) / radius;
+    const rawY = (event.clientY - (bounds.top + bounds.height / 2)) / radius;
+    const length = Math.hypot(rawX, rawY);
+    const scale = length > 1 ? 1 / length : 1;
+    const vector = { x: rawX * scale, y: rawY * scale };
+    joystickVectors.current[name] = vector;
+    setJoystickPosition((current) => ({ ...current, [name]: vector }));
+    return vector;
+  }, []);
+
+  const startJoystick = useCallback((name: JoystickName, event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    void enableMotion();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    joystickPointers.current[name] = event.pointerId;
+    joystickTicks.current[name] = 0;
+    const vector = updateJoystick(name, event);
+    actOnJoystick(name, vector, true);
+    if (joystickTimers.current[name] != null) window.clearInterval(joystickTimers.current[name]!);
+    joystickTimers.current[name] = window.setInterval(() => {
+      joystickTicks.current[name] += 1;
+      actOnJoystick(name, joystickVectors.current[name]);
+    }, 115);
+  }, [actOnJoystick, enableMotion, updateJoystick]);
+
+  const moveJoystick = useCallback((name: JoystickName, event: React.PointerEvent<HTMLButtonElement>) => {
+    if (joystickPointers.current[name] !== event.pointerId) return;
+    updateJoystick(name, event);
+  }, [updateJoystick]);
+
+  const stopJoystick = useCallback((name: JoystickName, pointerId: number) => {
+    if (joystickPointers.current[name] !== pointerId) return;
+    joystickPointers.current[name] = null;
+    joystickVectors.current[name] = { x: 0, y: 0 };
+    setJoystickPosition((current) => ({ ...current, [name]: { x: 0, y: 0 } }));
+    if (joystickTimers.current[name] != null) window.clearInterval(joystickTimers.current[name]!);
+    joystickTimers.current[name] = null;
+  }, []);
+
+  const onJoystickKeyDown = useCallback((name: JoystickName, event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!event.key.startsWith("Arrow")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (name === "move") {
+      if (event.key === "ArrowLeft") moveFromScreenVector(-1, 0);
+      if (event.key === "ArrowRight") moveFromScreenVector(1, 0);
+      if (event.key === "ArrowUp") moveFromScreenVector(0, -1);
+      if (event.key === "ArrowDown") moveFromScreenVector(0, 1);
+      return;
+    }
+    if (event.key === "ArrowLeft") rotateFromCamera(-1);
+    if (event.key === "ArrowRight") rotateFromCamera(1);
+    if (event.key === "ArrowUp") move(0, 1, 0);
+    if (event.key === "ArrowDown") move(0, -1, 0);
+  }, [move, moveFromScreenVector, rotateFromCamera]);
+
+  useEffect(() => () => {
+    (Object.keys(joystickTimers.current) as JoystickName[]).forEach((name) => {
+      if (joystickTimers.current[name] != null) window.clearInterval(joystickTimers.current[name]!);
+    });
+  }, []);
 
   const onPointerDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -904,7 +1002,23 @@ export default function Game() {
           )}
         </div>
 
-        <div className="canvas-wrap">
+        <div className="play-stage">
+          <div className="tablet-stick move-stick">
+            <strong>MOVE</strong>
+            <button
+              type="button"
+              aria-label="Move the active piece relative to the view"
+              onPointerDown={(event) => startJoystick("move", event)}
+              onPointerMove={(event) => moveJoystick("move", event)}
+              onPointerUp={(event) => stopJoystick("move", event.pointerId)}
+              onPointerCancel={(event) => stopJoystick("move", event.pointerId)}
+              onKeyDown={(event) => onJoystickKeyDown("move", event)}
+            >
+              <i style={{ transform: `translate(-50%, -50%) translate(${joystickPosition.move.x * 34}px, ${joystickPosition.move.y * 34}px)` }} />
+            </button>
+            <small>IN VIEW</small>
+          </div>
+          <div className="canvas-wrap">
           <canvas
             ref={canvasRef}
             onPointerDown={onPointerDown}
@@ -922,6 +1036,22 @@ export default function Game() {
               <button onClick={game.gameOver ? restart : togglePause}>{game.gameOver ? "PLAY AGAIN" : "CONTINUE"}</button>
             </div>
           )}
+          </div>
+          <div className="tablet-stick action-stick">
+            <strong>TURN</strong>
+            <button
+              type="button"
+              aria-label="Turn the active piece left or right, or move it up and down"
+              onPointerDown={(event) => startJoystick("action", event)}
+              onPointerMove={(event) => moveJoystick("action", event)}
+              onPointerUp={(event) => stopJoystick("action", event.pointerId)}
+              onPointerCancel={(event) => stopJoystick("action", event.pointerId)}
+              onKeyDown={(event) => onJoystickKeyDown("action", event)}
+            >
+              <i style={{ transform: `translate(-50%, -50%) translate(${joystickPosition.action.x * 34}px, ${joystickPosition.action.y * 34}px)` }} />
+            </button>
+            <small>HEIGHT</small>
+          </div>
         </div>
       </section>
 

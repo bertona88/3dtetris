@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-test("renders production metadata and all game modes", async () => {
+test("renders production metadata, game modes, and tablet controls", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
@@ -38,6 +38,8 @@ test("renders production metadata and all game modes", async () => {
   assert.match(html, /3D BLOCKS/);
   assert.match(html, /360° GRAVITY/);
   assert.match(html, /9×9 · CLEAR 3×3/);
+  assert.match(html, /Move the active piece relative to the view/);
+  assert.match(html, /Turn the active piece left or right, or move it up and down/);
   assert.match(html, /THIS IS A WOFI IDEA/);
   assert.doesNotMatch(html, /GRAVITY TETRIS|TILT TETRIS/i);
 });
