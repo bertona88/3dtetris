@@ -7,9 +7,11 @@ mode is implemented.
 
 ## Product boundary
 
-- The current prototype provides a 5 x 5 x 9 falling-block grid, front/top/side
-  projections, touch dragging, piece rotation, hard drop, scoring, layer
-  clearing, pause/restart, and a responsive mobile interface.
+- The current prototype provides a classic 5 x 5 x 10 falling-block grid and a
+  separate 9 x 9 Patch mode that clears filled 3 x 3 squares and collapses
+  columns, plus front/top/side projections, touch dragging, wall-kicked piece
+  rotation, hard drop, scoring, layer clearing, pause/restart, and a responsive
+  mobile interface.
 - Device-orientation camera control and radial-gravity spherical packing are
   implemented in the reconciled release. Keep claims limited to browser-tested
   behavior: orientation access still depends on device and browser permission.
