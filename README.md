@@ -1,33 +1,37 @@
 # 3D Blocks
 
-Prototipo mobile-first di un puzzle 3D di blocchi, con Tetris citato esclusivamente come antenato storico del gameplay e un'identita visiva indipendente. La camera segue l'inclinazione del dispositivo e il gioco offre due modelli di gravita.
+A mobile-first prototype of a 3D block-stacking puzzle. Tetris is referenced only as the historical gameplay ancestor; 3D Blocks has an independent product identity. The camera follows device orientation, and the game includes bounded vertical-gravity modes plus a radial-gravity packing mode.
 
-## Funzioni
+## Features
 
-- modalità **Tower**, con gravità verticale e cancellazione degli strati
-- modalità **Core**, con attrazione tridimensionale verso il punto centrale
-- accumulo sferico senza limite fisso: il volume di gioco cresce con il nucleo
-- punteggio Core basato sulla densità del packing e sul raggio del cluster
-- camera controllata dall'orientamento del dispositivo, con moltiplicatori e smoothing regolabili
-- swipe relativo alla camera per muovere il pezzo, tap per ruotarlo e pressione lunga per il drop
-- doppi joystick virtuali sui tablet: movimento relativo alla vista a sinistra, rotazione e altezza a destra
-- controlli tastiera e interfaccia responsive per cellulare e tablet
+- **Tower** mode: a 5 x 5 x 10 grid with vertical gravity and full-layer clearing
+- **Patch** mode: a 9 x 9 grid where completed 3 x 3 patches clear, columns collapse, and chain clears are possible
+- **Core** mode: three-dimensional attraction toward a central point with spherical accumulation
+- Core scoring based on packing density and cluster radius
+- device-orientation camera controls with adjustable multipliers and smoothing
+- camera-relative swipes to move the active piece, tap to rotate, and long press to hard drop
+- dual virtual joysticks on tablets: view-relative movement on the left, rotation and height control on the right
+- keyboard controls and a responsive interface for phones and tablets
+- wall-kicked piece rotation to make rotations near board boundaries more forgiving
 
-Questa implementazione e collegata alla [Wofi Idea Gyroscopic 3D Block-Stacking View](https://wofi.ai/ideas/sha256%3Ac472014b92b2e4c50702ad044544f964707a78157100c5e79ce161bc01eca510).
+This implementation is linked to the [WOFI Idea “Gyroscopic 3D Block-Stacking View”](https://wofi.ai/ideas/sha256%3Ac472014b92b2e4c50702ad044544f964707a78157100c5e79ce161bc01eca510).
 
-## Avvio locale
+## Local development
 
 ```bash
 npm ci
 npm run dev
 ```
 
-Apri l'indirizzo indicato dal server di sviluppo.
+Open the address printed by the development server.
 
-## Build
+## Build and test
 
 ```bash
-npm run build
+npm test
+npm run lint
 ```
 
-Versione online: https://3dblocks.wofi.ai
+`npm test` runs the production build, validates the Sites Worker artifact, and checks rendered metadata.
+
+Live version: https://3dblocks.wofi.ai
