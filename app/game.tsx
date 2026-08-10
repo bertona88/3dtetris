@@ -39,7 +39,7 @@ type Gesture = {
 };
 
 const BOARD = 5;
-const HEIGHT = 10;
+const HEIGHT = 12;
 const COLORS = ["#ff5b79", "#ffc24b", "#65e6b4", "#7b8cff", "#e982ff"];
 const CORE_COLOR = "#d7ff56";
 const DEG = Math.PI / 180;
@@ -710,7 +710,7 @@ export default function Game() {
       const sceneRadius = current.mode === "core" ? Math.max(4, current.radius + 1.5, activeRadius + 1) : 6;
       const scale = current.mode === "core"
         ? Math.min(width, height) / (sceneRadius * 2.15)
-        : Math.min(width / 9.2, height / 14.5);
+        : Math.min(width / (BOARD + 4.2), height / (HEIGHT + 4.5));
       const centerY = current.mode === "core" ? height * 0.5 : height * 0.53;
       const worldToView = quaternionConjugate(motion.orientation);
 
