@@ -30,6 +30,10 @@ button { color: inherit; }
   --accent: #73f5ff;
   background: radial-gradient(circle at 50% 42%, rgba(46, 101, 105, .28), transparent 31%), radial-gradient(circle at 50% 18%, #242631 0, #0b0b0e 49%);
 }
+.game-shell.patch-mode {
+  --accent: #ffbe55;
+  background: radial-gradient(circle at 50% 38%, rgba(126, 82, 29, .22), transparent 34%), radial-gradient(circle at 50% 18%, #29252d 0, #0b0b0e 49%);
+}
 
 .topbar, .brand, .motion-bar, footer { display: flex; align-items: center; }
 .topbar { justify-content: space-between; }
@@ -64,6 +68,8 @@ button { color: inherit; }
   border: 1px solid var(--line);
   background: #111116;
 }
+.game-mode-switch { grid-template-columns: repeat(3, 1fr); }
+.game-mode-switch button { gap: 6px; }
 .mode-switch button {
   min-height: 48px;
   display: flex;
@@ -128,7 +134,7 @@ button { color: inherit; }
   box-shadow: 0 30px 90px rgba(0, 0, 0, .5);
   overflow: hidden;
 }
-.core-brief {
+.core-brief, .patch-brief {
   min-height: 48px;
   padding: 10px 14px;
   display: flex;
@@ -137,16 +143,21 @@ button { color: inherit; }
   border-bottom: 1px solid rgba(115, 245, 255, .14);
   background: linear-gradient(90deg, rgba(115,245,255,.08), transparent);
 }
-.core-brief i { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 16px var(--lime); }
-.core-brief span, .core-brief strong, .core-brief small { display: block; }
-.core-brief strong { font-size: 8px; letter-spacing: .16em; }
-.core-brief small { margin-top: 4px; color: #898994; font-size: 8px; line-height: 1.25; }
+.patch-brief {
+  border-bottom: 1px solid rgba(255, 190, 85, .14);
+  background: linear-gradient(90deg, rgba(255,190,85,.08), transparent);
+}
+.core-brief i, .patch-brief i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 16px var(--accent); }
+.core-brief span, .core-brief strong, .core-brief small, .patch-brief span, .patch-brief strong, .patch-brief small { display: block; }
+.core-brief strong, .patch-brief strong { font-size: 8px; letter-spacing: .16em; }
+.core-brief small, .patch-brief small { margin-top: 4px; color: #898994; font-size: 8px; line-height: 1.25; }
 .score-row { height: 65px; display: grid; grid-template-columns: 1.45fr 1fr 1fr; border-bottom: 1px solid var(--line); }
 .score-row div { padding: 13px 16px; border-right: 1px solid var(--line); }
 .score-row div:last-child { border-right: 0; }
 .score-row small { display: block; color: var(--muted); font-size: 8px; letter-spacing: .2em; margin-bottom: 5px; }
 .score-row strong { font-size: 20px; letter-spacing: .04em; }
 .core-mode .score-row div:nth-child(n + 2) strong { color: var(--accent); }
+.patch-mode .score-row div:nth-child(n + 2) strong { color: var(--accent); }
 
 .canvas-wrap {
   position: relative;
@@ -159,6 +170,9 @@ button { color: inherit; }
 }
 .core-mode .canvas-wrap {
   background: radial-gradient(circle at 50% 50%, rgba(115,245,255,.10), transparent 28%), radial-gradient(circle at 50% 48%, #242631, #0d0e13 70%);
+}
+.patch-mode .canvas-wrap {
+  background: radial-gradient(circle at 50% 52%, rgba(255,190,85,.08), transparent 34%), radial-gradient(circle at 50% 48%, #29242c, #0d0e13 72%);
 }
 .canvas-wrap::before {
   content: "";
@@ -178,6 +192,7 @@ canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: 
 canvas:active { cursor: grabbing; }
 .axis-chip { position: absolute; top: 10px; right: 10px; border: 1px solid var(--line); background: #101015cc; color: #9a99a4; padding: 6px 8px; font: 700 8px monospace; letter-spacing: .13em; }
 .core-mode .axis-chip { color: var(--accent); border-color: rgba(115,245,255,.22); }
+.patch-mode .axis-chip { color: var(--accent); border-color: rgba(255,190,85,.24); }
 .gesture-help {
   position: absolute;
   left: 50%;
@@ -235,12 +250,12 @@ footer button { margin-left: auto; border: 0; border-bottom: 1px solid #777680; 
   .game-shell { padding: 12px; gap: 10px; }
   .motion-copy small { max-width: 158px; overflow: hidden; text-overflow: ellipsis; }
   .canvas-wrap { min-height: 330px; height: 47dvh; }
-  .core-brief small { max-width: 310px; }
+  .core-brief small, .patch-brief small { max-width: 310px; }
   footer em { display: none; }
 }
 @media (max-height: 780px) {
   .canvas-wrap { min-height: 290px; height: 41dvh; }
-  .core-brief { display: none; }
+  .core-brief, .patch-brief { display: none; }
 }
 @media (min-width: 700px) { .game-shell { border-left: 1px solid #222228; border-right: 1px solid #222228; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }

@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import { clearPatches, findWallKickedRotation } from "./game-rules";
 
-type Mode = "tower" | "core";
+type Mode = "tower" | "patch" | "core";
 type ViewMode = "orbit" | "spatial";
 type Axis = "x" | "y" | "z";
 type Vector = { x: number; y: number; z: number };
@@ -38,8 +39,10 @@ type Gesture = {
   startedAt: number;
 };
 
-const BOARD = 5;
+const TOWER_BOARD = 5;
+const PATCH_BOARD = 9;
 const HEIGHT = 10;
+const PATCH_SIZE = 3;
 const COLORS = ["#ff5b79", "#ffc24b", "#65e6b4", "#7b8cff", "#e982ff"];
 const CORE_COLOR = "#d7ff56";
 const DEG = Math.PI / 180;
@@ -74,6 +77,8 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 const distanceSquared = ({ x, y, z }: Vector) => x * x + y * y + z * z;
 const pieceDistance = (piece: Piece) => piece.cubes.reduce((sum, cube) => sum + distanceSquared(cube), 0);
 const randomShapeIndex = () => Math.floor(Math.random() * SHAPES.length);
+const isBoundedMode = (mode: Mode) => mode !== "core";
+const boardSizeForMode = (mode: Mode) => mode === "patch" ? PATCH_BOARD : TOWER_BOARD;
 
 function quaternionNormalize(q: Quaternion): Quaternion {
   const length = Math.hypot(q.x, q.y, q.z, q.w) || 1;
@@ -206,17 +211,22 @@ function makeTemplatePiece(shapeIndex: number): Piece {
   };
 }
 
-function makeTowerPiece(shapeIndex: number): Piece {
+function makeTowerPiece(shapeIndex: number, mode: Exclude<Mode, "core">): Piece {
   const offsets = SHAPES[shapeIndex % SHAPES.length];
   const color = COLORS[shapeIndex % COLORS.length];
   const highestOffset = Math.max(...offsets.map(([, y]) => y));
+  const width = Math.max(...offsets.map(([x]) => x)) + 1;
+  const depth = Math.max(...offsets.map(([, , z]) => z)) + 1;
+  const boardSize = boardSizeForMode(mode);
+  const spawnX = Math.floor((boardSize - width) / 2);
+  const spawnZ = Math.floor((boardSize - depth) / 2);
   return {
     color,
     shapeIndex,
     cubes: offsets.map(([x, y, z]) => ({
-      x: x + 1,
+      x: x + spawnX,
       y: y + HEIGHT - 1 - highestOffset,
-      z: z + 1,
+      z: z + spawnZ,
       color,
     })),
   };
@@ -236,11 +246,11 @@ function coreStats(cubes: Cube[]) {
   return { radius, density: capacity ? Math.min(1, cubes.length / capacity) : 0 };
 }
 
-function isValidTower(cubes: Cube[], settled: Cube[]) {
+function isValidTower(cubes: Cube[], settled: Cube[], boardSize: number) {
   const occupied = new Set(settled.map(cubeKey));
   return cubes.every((cube) =>
-    cube.x >= 0 && cube.x < BOARD &&
-    cube.z >= 0 && cube.z < BOARD &&
+    cube.x >= 0 && cube.x < boardSize &&
+    cube.z >= 0 && cube.z < boardSize &&
     cube.y >= 0 && cube.y < HEIGHT &&
     !occupied.has(cubeKey(cube))
   );
@@ -252,7 +262,9 @@ function isValidCore(cubes: Cube[], settled: Cube[]) {
 }
 
 function isValidForGame(game: Game, cubes: Cube[]) {
-  return game.mode === "tower" ? isValidTower(cubes, game.settled) : isValidCore(cubes, game.settled);
+  return isBoundedMode(game.mode)
+    ? isValidTower(cubes, game.settled, boardSizeForMode(game.mode))
+    : isValidCore(cubes, game.settled);
 }
 
 function spawnCorePiece(shapeIndex: number, settled: Cube[], preferredDirection: number) {
@@ -306,18 +318,21 @@ function initialGame(mode: Mode = "tower"): Game {
     };
   }
 
+  const boundedMode = mode as Exclude<Mode, "core">;
+  const boardSize = boardSizeForMode(boundedMode);
+  const seedOffset = Math.floor((boardSize - TOWER_BOARD) / 2);
   return {
     mode,
     settled: [
-      { x: 0, y: 0, z: 0, color: "#7b8cff" },
-      { x: 1, y: 0, z: 0, color: "#7b8cff" },
-      { x: 1, y: 0, z: 1, color: "#7b8cff" },
-      { x: 2, y: 0, z: 1, color: "#65e6b4" },
-      { x: 3, y: 0, z: 1, color: "#65e6b4" },
-      { x: 3, y: 0, z: 2, color: "#65e6b4" },
+      { x: seedOffset, y: 0, z: seedOffset, color: "#7b8cff" },
+      { x: seedOffset + 1, y: 0, z: seedOffset, color: "#7b8cff" },
+      { x: seedOffset + 1, y: 0, z: seedOffset + 1, color: "#7b8cff" },
+      { x: seedOffset + 2, y: 0, z: seedOffset + 1, color: "#65e6b4" },
+      { x: seedOffset + 3, y: 0, z: seedOffset + 1, color: "#65e6b4" },
+      { x: seedOffset + 3, y: 0, z: seedOffset + 2, color: "#65e6b4" },
     ],
-    active: makeTowerPiece(0),
-    next: makeTowerPiece(3),
+    active: makeTowerPiece(0, boundedMode),
+    next: makeTowerPiece(3, boundedMode),
     score: 120,
     layers: 0,
     radius: 0,
@@ -360,24 +375,34 @@ function radialStep(piece: Piece, settled: Cube[]) {
 
 function lockTowerAndSpawn(game: Game, piece: Piece): Game {
   const merged = [...game.settled, ...piece.cubes];
-  const fullLayers = Array.from({ length: HEIGHT }, (_, y) => y)
-    .filter((y) => merged.filter((cube) => cube.y === y).length === BOARD * BOARD);
-  const remaining = merged
-    .filter((cube) => !fullLayers.includes(cube.y))
-    .map((cube) => ({
-      ...cube,
-      y: cube.y - fullLayers.filter((clearedY) => clearedY < cube.y).length,
-    }));
+  const boardSize = boardSizeForMode(game.mode);
+  let clears = 0;
+  let remaining: Cube[];
+  if (game.mode === "patch") {
+    const result = clearPatches(merged, PATCH_BOARD, PATCH_SIZE, HEIGHT);
+    clears = result.patches;
+    remaining = result.remaining;
+  } else {
+    const fullLayers = Array.from({ length: HEIGHT }, (_, y) => y)
+      .filter((y) => merged.filter((cube) => cube.y === y).length === boardSize * boardSize);
+    clears = fullLayers.length;
+    remaining = merged
+      .filter((cube) => !fullLayers.includes(cube.y))
+      .map((cube) => ({
+        ...cube,
+        y: cube.y - fullLayers.filter((clearedY) => clearedY < cube.y).length,
+      }));
+  }
   const incoming = game.next;
   return {
     ...game,
     settled: remaining,
     active: incoming,
-    next: makeTowerPiece(randomShapeIndex()),
-    score: game.score + (fullLayers.length ? fullLayers.length * 500 : 20),
-    layers: game.layers + fullLayers.length,
+    next: makeTowerPiece(randomShapeIndex(), game.mode),
+    score: game.score + (clears ? clears * 500 : 20),
+    layers: game.layers + clears,
     pieces: game.pieces + 1,
-    gameOver: !isValidTower(incoming.cubes, remaining),
+    gameOver: !isValidTower(incoming.cubes, remaining, boardSize),
   };
 }
 
@@ -403,9 +428,9 @@ function lockCoreAndSpawn(game: Game, piece: Piece): Game {
 
 function advanceGame(game: Game): Game {
   if (game.paused || game.gameOver) return game;
-  if (game.mode === "tower") {
+  if (isBoundedMode(game.mode)) {
     const moved = translatePiece(game.active, { x: 0, y: -1, z: 0 });
-    return isValidTower(moved.cubes, game.settled) ? { ...game, active: moved } : lockTowerAndSpawn(game, game.active);
+    return isValidTower(moved.cubes, game.settled, boardSizeForMode(game.mode)) ? { ...game, active: moved } : lockTowerAndSpawn(game, game.active);
   }
   const moved = radialStep(game.active, game.settled);
   return moved ? { ...game, active: moved } : lockCoreAndSpawn(game, game.active);
@@ -557,17 +582,18 @@ export default function Game() {
         if (axis === "z") return { ...cube, x: pivot.x - dy, y: pivot.y + dx };
         return { ...cube, x: pivot.x - dz, z: pivot.z + dx };
       });
-      return isValidForGame(current, cubes) ? { ...current, active: { ...current.active, cubes } } : current;
+      const kicked = findWallKickedRotation(cubes, axis, (candidate) => isValidForGame(current, candidate));
+      return kicked ? { ...current, active: { ...current.active, cubes: kicked } } : current;
     });
   }, []);
 
   const hardDrop = useCallback(() => {
     setGame((current) => {
       if (current.paused || current.gameOver) return current;
-      if (current.mode === "tower") {
+      if (isBoundedMode(current.mode)) {
         let piece = current.active;
         let moved = translatePiece(piece, { x: 0, y: -1, z: 0 });
-        while (isValidTower(moved.cubes, current.settled)) {
+        while (isValidTower(moved.cubes, current.settled, boardSizeForMode(current.mode))) {
           piece = moved;
           moved = translatePiece(piece, { x: 0, y: -1, z: 0 });
         }
@@ -707,17 +733,18 @@ export default function Game() {
       const motion = camera.current;
       motion.orientation = quaternionSlerp(motion.orientation, motion.targetOrientation, smoothing);
       const activeRadius = Math.sqrt(Math.max(...current.active.cubes.map(distanceSquared), 0));
-      const sceneRadius = current.mode === "core" ? Math.max(4, current.radius + 1.5, activeRadius + 1) : 6;
+      const boardSize = boardSizeForMode(current.mode);
+      const sceneRadius = current.mode === "core" ? Math.max(4, current.radius + 1.5, activeRadius + 1) : Math.max(boardSize, HEIGHT) * 0.72;
       const scale = current.mode === "core"
         ? Math.min(width, height) / (sceneRadius * 2.15)
-        : Math.min(width / 9.2, height / 14.5);
+        : Math.min(width / (boardSize * 1.62), height / (HEIGHT * 1.45));
       const centerY = current.mode === "core" ? height * 0.5 : height * 0.53;
       const worldToView = quaternionConjugate(motion.orientation);
 
       const project = (x: number, y: number, z: number): Projected => {
-        const centeredX = current.mode === "core" ? x : x - BOARD / 2;
+        const centeredX = current.mode === "core" ? x : x - boardSize / 2;
         const centeredY = current.mode === "core" ? y : y - HEIGHT / 2;
-        const centeredZ = current.mode === "core" ? z : z - BOARD / 2;
+        const centeredZ = current.mode === "core" ? z : z - boardSize / 2;
         const view = quaternionRotateVector(worldToView, { x: centeredX, y: centeredY, z: centeredZ });
         const perspectiveDistance = Math.max(12, sceneRadius * 4);
         const perspective = perspectiveDistance / (perspectiveDistance - view.z * 0.42);
@@ -725,13 +752,13 @@ export default function Game() {
       };
 
       context.lineWidth = 1;
-      if (current.mode === "tower") {
+      if (isBoundedMode(current.mode)) {
         context.strokeStyle = "rgba(255,255,255,.10)";
-        for (let i = 0; i <= BOARD; i += 1) {
+        for (let i = 0; i <= boardSize; i += 1) {
           const a = project(i, 0, 0);
-          const b = project(i, 0, BOARD);
+          const b = project(i, 0, boardSize);
           const c = project(0, 0, i);
-          const d = project(BOARD, 0, i);
+          const d = project(boardSize, 0, i);
           context.beginPath(); context.moveTo(a.x, a.y); context.lineTo(b.x, b.y); context.stroke();
           context.beginPath(); context.moveTo(c.x, c.y); context.lineTo(d.x, d.y); context.stroke();
         }
@@ -818,18 +845,22 @@ export default function Game() {
     ? (viewMode === "orbit" ? "Tilt between front, top, and side" : "1:1 full-sphere orientation")
     : "Enable motion to steer the view";
 
+  const modeSubtitle = game.mode === "core" ? "RADIAL CORE" : game.mode === "patch" ? "9×9 PATCH GRID" : "MOTION TOWER";
+  const clearLabel = game.mode === "patch" ? "PATCHES" : "LAYERS";
+
   return (
-    <main className={`game-shell ${game.mode === "core" ? "core-mode" : ""}`}>
+    <main className={`game-shell ${game.mode === "core" ? "core-mode" : game.mode === "patch" ? "patch-mode" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark">3D</span>
-          <div><strong>3D BLOCKS</strong><small>{game.mode === "core" ? "RADIAL CORE" : "MOTION TOWER"}</small></div>
+          <div><strong>3D BLOCKS</strong><small>{modeSubtitle}</small></div>
         </div>
         <button className="icon-btn" onClick={togglePause} aria-label={game.paused ? "Resume" : "Pause"}>{game.paused ? "▶" : "Ⅱ"}</button>
       </header>
 
-      <nav className="mode-switch" aria-label="Game mode">
+      <nav className="mode-switch game-mode-switch" aria-label="Game mode">
         <button className={game.mode === "tower" ? "active" : ""} onClick={() => selectMode("tower")}><b>↓</b><span>TOWER<small>ONE-WAY GRAVITY</small></span></button>
+        <button className={game.mode === "patch" ? "active" : ""} onClick={() => selectMode("patch")}><b>▦</b><span>PATCH<small>9×9 · CLEAR 3×3</small></span></button>
         <button className={game.mode === "core" ? "active" : ""} onClick={() => selectMode("core")}><b>◎</b><span>CORE<small>360° GRAVITY</small></span></button>
       </nav>
 
@@ -863,12 +894,13 @@ export default function Game() {
 
       <section className="game-card">
         {game.mode === "core" && <div className="core-brief"><i /> <span><strong>PACK THE CORE</strong><small>Every piece seeks point zero. Keep the radius small and the density high.</small></span></div>}
+        {game.mode === "patch" && <div className="patch-brief"><i /> <span><strong>BUILD A 3×3 PATCH</strong><small>Any filled 3×3 square clears. Columns fall and can trigger chain clears.</small></span></div>}
         <div className="score-row">
           <div><small>SCORE</small><strong>{game.score.toLocaleString()}</strong></div>
-          {game.mode === "tower" ? (
-            <><div><small>LEVEL</small><strong>{level}</strong></div><div><small>LAYERS</small><strong>{game.layers}</strong></div></>
-          ) : (
+          {game.mode === "core" ? (
             <><div><small>RADIUS</small><strong>{game.radius.toFixed(1)}</strong></div><div><small>DENSITY</small><strong>{Math.round(game.density * 100)}%</strong></div></>
+          ) : (
+            <><div><small>LEVEL</small><strong>{level}</strong></div><div><small>{clearLabel}</small><strong>{game.layers}</strong></div></>
           )}
         </div>
 
@@ -879,10 +911,10 @@ export default function Game() {
             onPointerMove={onPointerMove}
             onPointerUp={(event) => finishGesture(event)}
             onPointerCancel={(event) => finishGesture(event, true)}
-            aria-label={game.mode === "core" ? "Radial 3D Blocks core. Swipe to move, tap to rotate, and hold to pull the active piece toward the center." : "3D Blocks tower. Swipe to move, tap to rotate, and hold to drop the active piece. Camera orientation follows the selected motion view."}
+            aria-label={game.mode === "core" ? "Radial 3D Blocks core. Swipe to move, tap to rotate, and hold to pull the active piece toward the center." : game.mode === "patch" ? "9 by 9 patch grid. Fill any 3 by 3 square to clear it. Swipe to move, tap to rotate, and hold to drop the active piece." : "3D Blocks tower. Swipe to move, tap to rotate, and hold to drop the active piece. Camera orientation follows the selected motion view."}
             aria-describedby="gesture-help"
           />
-          <div className="axis-chip">{game.mode === "core" ? `CORE · ${viewMode.toUpperCase()}` : `${viewMode.toUpperCase()} VIEW`}</div>
+          <div className="axis-chip">{game.mode === "core" ? `CORE · ${viewMode.toUpperCase()}` : game.mode === "patch" ? `9×9 · ${viewMode.toUpperCase()}` : `${viewMode.toUpperCase()} VIEW`}</div>
           <div className="gesture-help" id="gesture-help"><span>SWIPE</span> MOVE <i /> <span>TAP</span> ROTATE <i /> <span>HOLD</span> {game.mode === "core" ? "PULL" : "DROP"}</div>
           {(game.paused || game.gameOver) && (
             <div className="overlay">
