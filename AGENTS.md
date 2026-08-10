@@ -7,7 +7,7 @@ mode is implemented.
 
 ## Product boundary
 
-- The current prototype provides a 5 x 5 x 9 falling-block grid, front/top/side
+- The current prototype provides a 5 x 5 x 12 falling-block grid, front/top/side
   projections, touch dragging, piece rotation, hard drop, scoring, layer
   clearing, pause/restart, and a responsive mobile interface.
 - Device-orientation camera control and radial-gravity spherical packing are
