@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-test("renders production metadata and both gravity modes", async () => {
+test("renders production metadata and all game modes", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
@@ -37,6 +37,7 @@ test("renders production metadata and both gravity modes", async () => {
   assert.match(html, /TILT CAMERA/);
   assert.match(html, /3D BLOCKS/);
   assert.match(html, /360° GRAVITY/);
+  assert.match(html, /9×9 · CLEAR 3×3/);
   assert.match(html, /THIS IS A WOFI IDEA/);
   assert.doesNotMatch(html, /GRAVITY TETRIS|TILT TETRIS/i);
 });
