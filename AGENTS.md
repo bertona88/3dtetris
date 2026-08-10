@@ -96,6 +96,8 @@ distinct graph object.
 
 ## Repository hygiene
 
+- Use English for repository documentation, user-facing UI text, code comments,
+  test descriptions, and commit messages.
 - Preserve the existing Vinext/Next/React structure and lockfile.
 - Keep generated runtime state, caches, dependencies, and `dist/` out of source
   commits unless the repository policy changes explicitly.
