@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-test("renders production metadata, game modes, and tablet controls", async () => {
+test("renders production metadata, a calm start, and accessible game controls", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
@@ -34,10 +34,13 @@ test("renders production metadata, game modes, and tablet controls", async () =>
   assert.match(html, /<title>3D Blocks<\/title>/i);
   assert.match(html, /<meta[^>]+property=["']og:image["'][^>]+content=["']https:\/\/preview\.example\/og\.png["']/i);
   assert.doesNotMatch(html, /codex-preview/i);
-  assert.match(html, /TILT CAMERA/);
+  assert.match(html, /Tilt camera/);
   assert.match(html, /3D BLOCKS/);
-  assert.match(html, /360° GRAVITY/);
-  assert.match(html, /9×9 · CLEAR 3×3/);
+  assert.match(html, /No timer. You can undo a move./);
+  assert.match(html, /Welcome to 3D Blocks/);
+  assert.match(html, /Landing spot/);
+  assert.match(html, /Move up in view/);
+  assert.match(html, /Next piece: 2 cubes/);
   assert.match(html, /Move the active piece relative to the view/);
   assert.match(html, /Turn the active piece left or right, or move it up and down/);
   assert.match(html, /THIS IS A WOFI IDEA/);

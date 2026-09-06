@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 const title = "3D Blocks";
-const description = "A motion-controlled 3D block-stacking game with tower and radial-core gravity modes.";
+const description = "A playful 3D block puzzle. Start with relaxed play, find your landing spot, and clear layers at your own pace.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
