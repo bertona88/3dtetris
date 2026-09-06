@@ -2,456 +2,35 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { clearPatches, findWallKickedRotation } from "./game-rules";
+import { findWallKickedRotation } from "./game-rules";
+import {
+  type Game as GameState, type Mode, type Pace, type ViewMode, type Axis, type Piece,
+  type Vector, type Quaternion, type Camera, type Gesture, type Projected, type Face,
+  HEIGHT, DEFAULT_YAW, DEFAULT_PITCH, HALF_PI, DEFAULT_CAMERA_ORIENTATION,
+  clamp, distanceSquared, initialGame, translatePiece, isValidForGame,
+  advanceGame, fallInterval, landingPiece, dropGame, undoGame, boardSizeForMode, isBoundedMode,
+  shade, screenMove, projectDirection, deviceQuaternion, getScreenOrientationAngle,
+  quaternionSlerp, quaternionNormalize, quaternionMultiply, quaternionConjugate,
+  quaternionNegate, quaternionDot, quaternionToRotationVector, quaternionFromAxisAngle,
+  quaternionRotateVector,
+} from "./game-engine";
 
-type Mode = "tower" | "patch" | "core";
-type ViewMode = "orbit" | "spatial";
-type Axis = "x" | "y" | "z";
-type Vector = { x: number; y: number; z: number };
-type Quaternion = { x: number; y: number; z: number; w: number };
-type Cube = Vector & { color: string };
-type Piece = { cubes: Cube[]; color: string; shapeIndex: number };
-type Game = {
-  mode: Mode;
-  settled: Cube[];
-  active: Piece;
-  next: Piece;
-  score: number;
-  layers: number;
-  radius: number;
-  density: number;
-  pieces: number;
-  spawnCursor: number;
-  paused: boolean;
-  gameOver: boolean;
-};
 type MotionStatus = "starting" | "active" | "unsupported" | "denied";
-type Projected = { x: number; y: number; depth: number };
-type Face = { points: Projected[]; depth: number; color: string };
-type Camera = { orientation: Quaternion; targetOrientation: Quaternion };
-type Gesture = {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  lastX: number;
-  lastY: number;
-  distance: number;
-  startedAt: number;
-};
 type JoystickName = "move" | "action";
 type JoystickVector = { x: number; y: number };
-
-const TOWER_BOARD = 5;
-const PATCH_BOARD = 9;
-const HEIGHT = 10;
-const PATCH_SIZE = 3;
-const COLORS = ["#ff5b79", "#ffc24b", "#65e6b4", "#7b8cff", "#e982ff"];
-const CORE_COLOR = "#d7ff56";
-const DEG = Math.PI / 180;
-const HALF_PI = Math.PI / 2;
-const DEFAULT_YAW = -Math.PI / 4;
-const DEFAULT_PITCH = Math.atan(1 / Math.sqrt(2));
-const SHAPES: Array<Array<[number, number, number]>> = [
-  [[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]],
-  [[0, 0, 0], [1, 0, 0], [2, 0, 0], [1, 1, 0]],
-  [[0, 0, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1]],
-  [[0, 0, 0], [1, 0, 0], [2, 0, 0], [2, 0, 1]],
-  [[0, 0, 0], [1, 0, 0], [1, 1, 0], [1, 1, 1]],
-];
-const CORE_DIRECTIONS: Vector[] = [
-  { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
-  { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 },
-  { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 },
-  { x: 1, y: 1, z: 0 }, { x: -1, y: 1, z: 0 },
-  { x: 1, y: -1, z: 0 }, { x: -1, y: -1, z: 0 },
-  { x: 1, y: 0, z: 1 }, { x: -1, y: 0, z: 1 },
-  { x: 1, y: 0, z: -1 }, { x: -1, y: 0, z: -1 },
-  { x: 0, y: 1, z: 1 }, { x: 0, y: -1, z: 1 },
-  { x: 0, y: 1, z: -1 }, { x: 0, y: -1, z: -1 },
-  { x: 1, y: 1, z: 1 }, { x: -1, y: 1, z: 1 },
-  { x: 1, y: -1, z: 1 }, { x: -1, y: -1, z: 1 },
-  { x: 1, y: 1, z: -1 }, { x: -1, y: 1, z: -1 },
-  { x: 1, y: -1, z: -1 }, { x: -1, y: -1, z: -1 },
-];
-
-const cubeKey = ({ x, y, z }: Pick<Cube, "x" | "y" | "z">) => `${x},${y},${z}`;
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-const distanceSquared = ({ x, y, z }: Vector) => x * x + y * y + z * z;
-const pieceDistance = (piece: Piece) => piece.cubes.reduce((sum, cube) => sum + distanceSquared(cube), 0);
-const randomShapeIndex = () => Math.floor(Math.random() * SHAPES.length);
-const isBoundedMode = (mode: Mode) => mode !== "core";
-const boardSizeForMode = (mode: Mode) => mode === "patch" ? PATCH_BOARD : TOWER_BOARD;
-const idleJoystick = (): Record<JoystickName, JoystickVector> => ({
-  move: { x: 0, y: 0 },
-  action: { x: 0, y: 0 },
-});
-
-function quaternionNormalize(q: Quaternion): Quaternion {
-  const length = Math.hypot(q.x, q.y, q.z, q.w) || 1;
-  return { x: q.x / length, y: q.y / length, z: q.z / length, w: q.w / length };
-}
-
-function quaternionConjugate(q: Quaternion): Quaternion {
-  return { x: -q.x, y: -q.y, z: -q.z, w: q.w };
-}
-
-function quaternionNegate(q: Quaternion): Quaternion {
-  return { x: -q.x, y: -q.y, z: -q.z, w: -q.w };
-}
-
-function quaternionDot(a: Quaternion, b: Quaternion) {
-  return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
-}
-
-function quaternionMultiply(a: Quaternion, b: Quaternion): Quaternion {
-  return {
-    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-  };
-}
-
-function quaternionFromAxisAngle(axis: Axis, angle: number): Quaternion {
-  const half = angle / 2;
-  const sine = Math.sin(half);
-  const cosine = Math.cos(half);
-  if (axis === "x") return { x: sine, y: 0, z: 0, w: cosine };
-  if (axis === "y") return { x: 0, y: sine, z: 0, w: cosine };
-  return { x: 0, y: 0, z: sine, w: cosine };
-}
-
-function quaternionFromEulerYXZ(x: number, y: number, z: number) {
-  return quaternionNormalize(
-    quaternionMultiply(
-      quaternionMultiply(quaternionFromAxisAngle("y", y), quaternionFromAxisAngle("x", x)),
-      quaternionFromAxisAngle("z", z),
-    ),
-  );
-}
-
-function quaternionRotateVector(q: Quaternion, vector: Vector): Vector {
-  const vectorQuaternion = { x: vector.x, y: vector.y, z: vector.z, w: 0 };
-  const rotated = quaternionMultiply(quaternionMultiply(q, vectorQuaternion), quaternionConjugate(q));
-  return { x: rotated.x, y: rotated.y, z: rotated.z };
-}
-
-function quaternionSlerp(from: Quaternion, to: Quaternion, amount: number): Quaternion {
-  let target = to;
-  let dot = quaternionDot(from, target);
-  if (dot < 0) {
-    target = quaternionNegate(target);
-    dot = -dot;
-  }
-  dot = clamp(dot, -1, 1);
-  if (dot > 0.9995) {
-    return quaternionNormalize({
-      x: from.x + (target.x - from.x) * amount,
-      y: from.y + (target.y - from.y) * amount,
-      z: from.z + (target.z - from.z) * amount,
-      w: from.w + (target.w - from.w) * amount,
-    });
-  }
-  const theta = Math.acos(dot);
-  const sine = Math.sin(theta);
-  const fromWeight = Math.sin((1 - amount) * theta) / sine;
-  const targetWeight = Math.sin(amount * theta) / sine;
-  return quaternionNormalize({
-    x: from.x * fromWeight + target.x * targetWeight,
-    y: from.y * fromWeight + target.y * targetWeight,
-    z: from.z * fromWeight + target.z * targetWeight,
-    w: from.w * fromWeight + target.w * targetWeight,
-  });
-}
-
-function quaternionToRotationVector(q: Quaternion): Vector {
-  let normalized = quaternionNormalize(q);
-  if (normalized.w < 0) normalized = quaternionNegate(normalized);
-  const sineHalf = Math.hypot(normalized.x, normalized.y, normalized.z);
-  if (sineHalf < 1e-7) return { x: 0, y: 0, z: 0 };
-  const angle = 2 * Math.atan2(sineHalf, clamp(normalized.w, -1, 1));
-  const scale = angle / sineHalf;
-  return { x: normalized.x * scale, y: normalized.y * scale, z: normalized.z * scale };
-}
-
-function deviceQuaternion(alpha: number, beta: number, gamma: number, screenAngle: number) {
-  const orientation = quaternionFromEulerYXZ(beta * DEG, alpha * DEG, -gamma * DEG);
-  const cameraCorrection = quaternionFromAxisAngle("x", -HALF_PI);
-  const screenCorrection = quaternionFromAxisAngle("z", -screenAngle * DEG);
-  return quaternionNormalize(quaternionMultiply(quaternionMultiply(orientation, cameraCorrection), screenCorrection));
-}
-
-function getScreenOrientationAngle() {
-  if (typeof window === "undefined") return 0;
-  if (typeof window.screen?.orientation?.angle === "number") return window.screen.orientation.angle;
-  const legacyWindow = window as Window & { orientation?: number };
-  return typeof legacyWindow.orientation === "number" ? legacyWindow.orientation : 0;
-}
-
-const DEFAULT_WORLD_TO_VIEW = quaternionNormalize(
-  quaternionMultiply(quaternionFromAxisAngle("x", DEFAULT_PITCH), quaternionFromAxisAngle("y", -DEFAULT_YAW)),
-);
-const DEFAULT_CAMERA_ORIENTATION = quaternionConjugate(DEFAULT_WORLD_TO_VIEW);
-
-function projectDirection(vector: Vector, camera: Camera) {
-  const view = quaternionRotateVector(quaternionConjugate(camera.orientation), vector);
-  return { x: view.x, y: -view.y, depth: view.z };
-}
-
-function centeredOffsets(shapeIndex: number) {
-  const shape = SHAPES[shapeIndex % SHAPES.length];
-  const axisCenter = (axis: 0 | 1 | 2) => {
-    const values = shape.map((offset) => offset[axis]);
-    return Math.floor((Math.min(...values) + Math.max(...values)) / 2);
-  };
-  const [cx, cy, cz] = [axisCenter(0), axisCenter(1), axisCenter(2)];
-  return shape.map(([x, y, z]) => ({ x: x - cx, y: y - cy, z: z - cz }));
-}
-
-function makeTemplatePiece(shapeIndex: number): Piece {
-  const color = COLORS[shapeIndex % COLORS.length];
-  return {
-    color,
-    shapeIndex,
-    cubes: centeredOffsets(shapeIndex).map((offset) => ({ ...offset, color })),
-  };
-}
-
-function makeTowerPiece(shapeIndex: number, mode: Exclude<Mode, "core">): Piece {
-  const offsets = SHAPES[shapeIndex % SHAPES.length];
-  const color = COLORS[shapeIndex % COLORS.length];
-  const highestOffset = Math.max(...offsets.map(([, y]) => y));
-  const width = Math.max(...offsets.map(([x]) => x)) + 1;
-  const depth = Math.max(...offsets.map(([, , z]) => z)) + 1;
-  const boardSize = boardSizeForMode(mode);
-  const spawnX = Math.floor((boardSize - width) / 2);
-  const spawnZ = Math.floor((boardSize - depth) / 2);
-  return {
-    color,
-    shapeIndex,
-    cubes: offsets.map(([x, y, z]) => ({
-      x: x + spawnX,
-      y: y + HEIGHT - 1 - highestOffset,
-      z: z + spawnZ,
-      color,
-    })),
-  };
-}
-
-function coreStats(cubes: Cube[]) {
-  const radius = cubes.length ? Math.sqrt(Math.max(...cubes.map(distanceSquared))) : 0;
-  const shell = Math.max(1, Math.ceil(radius));
-  let capacity = 0;
-  for (let x = -shell; x <= shell; x += 1) {
-    for (let y = -shell; y <= shell; y += 1) {
-      for (let z = -shell; z <= shell; z += 1) {
-        if (x * x + y * y + z * z <= shell * shell) capacity += 1;
-      }
-    }
-  }
-  return { radius, density: capacity ? Math.min(1, cubes.length / capacity) : 0 };
-}
-
-function isValidTower(cubes: Cube[], settled: Cube[], boardSize: number) {
-  const occupied = new Set(settled.map(cubeKey));
-  return cubes.every((cube) =>
-    cube.x >= 0 && cube.x < boardSize &&
-    cube.z >= 0 && cube.z < boardSize &&
-    cube.y >= 0 && cube.y < HEIGHT &&
-    !occupied.has(cubeKey(cube))
-  );
-}
-
-function isValidCore(cubes: Cube[], settled: Cube[]) {
-  const occupied = new Set(settled.map(cubeKey));
-  return cubes.every((cube) => !occupied.has(cubeKey(cube)));
-}
-
-function isValidForGame(game: Game, cubes: Cube[]) {
-  return isBoundedMode(game.mode)
-    ? isValidTower(cubes, game.settled, boardSizeForMode(game.mode))
-    : isValidCore(cubes, game.settled);
-}
-
-function spawnCorePiece(shapeIndex: number, settled: Cube[], preferredDirection: number) {
-  const color = COLORS[shapeIndex % COLORS.length];
-  const offsets = centeredOffsets(shapeIndex);
-  const clusterRadius = coreStats(settled).radius;
-  const spawnRadius = Math.max(4, Math.ceil(clusterRadius) + 3);
-
-  for (let attempt = 0; attempt < CORE_DIRECTIONS.length; attempt += 1) {
-    const directionIndex = (preferredDirection + attempt) % CORE_DIRECTIONS.length;
-    const direction = CORE_DIRECTIONS[directionIndex];
-    const length = Math.sqrt(distanceSquared(direction));
-    const anchor = {
-      x: Math.round(direction.x / length * spawnRadius),
-      y: Math.round(direction.y / length * spawnRadius),
-      z: Math.round(direction.z / length * spawnRadius),
-    };
-    const piece: Piece = {
-      color,
-      shapeIndex,
-      cubes: offsets.map((offset) => ({
-        x: anchor.x + offset.x,
-        y: anchor.y + offset.y,
-        z: anchor.z + offset.z,
-        color,
-      })),
-    };
-    if (isValidCore(piece.cubes, settled)) return { piece, directionIndex };
-  }
-  return null;
-}
-
-function initialGame(mode: Mode = "tower"): Game {
-  if (mode === "core") {
-    const settled = [{ x: 0, y: 0, z: 0, color: CORE_COLOR }];
-    const spawned = spawnCorePiece(0, settled, 0)!;
-    const stats = coreStats(settled);
-    return {
-      mode,
-      settled,
-      active: spawned.piece,
-      next: makeTemplatePiece(3),
-      score: 0,
-      layers: 0,
-      radius: stats.radius,
-      density: stats.density,
-      pieces: 0,
-      spawnCursor: spawned.directionIndex + 7,
-      paused: false,
-      gameOver: false,
-    };
-  }
-
-  const boundedMode = mode as Exclude<Mode, "core">;
-  const boardSize = boardSizeForMode(boundedMode);
-  const seedOffset = Math.floor((boardSize - TOWER_BOARD) / 2);
-  return {
-    mode,
-    settled: [
-      { x: seedOffset, y: 0, z: seedOffset, color: "#7b8cff" },
-      { x: seedOffset + 1, y: 0, z: seedOffset, color: "#7b8cff" },
-      { x: seedOffset + 1, y: 0, z: seedOffset + 1, color: "#7b8cff" },
-      { x: seedOffset + 2, y: 0, z: seedOffset + 1, color: "#65e6b4" },
-      { x: seedOffset + 3, y: 0, z: seedOffset + 1, color: "#65e6b4" },
-      { x: seedOffset + 3, y: 0, z: seedOffset + 2, color: "#65e6b4" },
-    ],
-    active: makeTowerPiece(0, boundedMode),
-    next: makeTowerPiece(3, boundedMode),
-    score: 120,
-    layers: 0,
-    radius: 0,
-    density: 0,
-    pieces: 0,
-    spawnCursor: 0,
-    paused: false,
-    gameOver: false,
-  };
-}
-
-function translatePiece(piece: Piece, vector: Vector): Piece {
-  return {
-    ...piece,
-    cubes: piece.cubes.map((cube) => ({
-      ...cube,
-      x: cube.x + vector.x,
-      y: cube.y + vector.y,
-      z: cube.z + vector.z,
-    })),
-  };
-}
-
-function radialStep(piece: Piece, settled: Cube[]) {
-  const currentDistance = pieceDistance(piece);
-  const candidates: Vector[] = [
-    { x: -1, y: 0, z: 0 }, { x: 1, y: 0, z: 0 },
-    { x: 0, y: -1, z: 0 }, { x: 0, y: 1, z: 0 },
-    { x: 0, y: 0, z: -1 }, { x: 0, y: 0, z: 1 },
-  ];
-  return candidates
-    .map((vector) => {
-      const moved = translatePiece(piece, vector);
-      return { moved, improvement: currentDistance - pieceDistance(moved) };
-    })
-    .filter(({ improvement }) => improvement > 0)
-    .sort((a, b) => b.improvement - a.improvement)
-    .find(({ moved }) => isValidCore(moved.cubes, settled))?.moved ?? null;
-}
-
-function lockTowerAndSpawn(game: Game, piece: Piece): Game {
-  const merged = [...game.settled, ...piece.cubes];
-  const boardSize = boardSizeForMode(game.mode);
-  let clears = 0;
-  let remaining: Cube[];
-  if (game.mode === "patch") {
-    const result = clearPatches(merged, PATCH_BOARD, PATCH_SIZE, HEIGHT);
-    clears = result.patches;
-    remaining = result.remaining;
-  } else {
-    const fullLayers = Array.from({ length: HEIGHT }, (_, y) => y)
-      .filter((y) => merged.filter((cube) => cube.y === y).length === boardSize * boardSize);
-    clears = fullLayers.length;
-    remaining = merged
-      .filter((cube) => !fullLayers.includes(cube.y))
-      .map((cube) => ({
-        ...cube,
-        y: cube.y - fullLayers.filter((clearedY) => clearedY < cube.y).length,
-      }));
-  }
-  const incoming = game.next;
-  return {
-    ...game,
-    settled: remaining,
-    active: incoming,
-    next: makeTowerPiece(randomShapeIndex(), game.mode),
-    score: game.score + (clears ? clears * 500 : 20),
-    layers: game.layers + clears,
-    pieces: game.pieces + 1,
-    gameOver: !isValidTower(incoming.cubes, remaining, boardSize),
-  };
-}
-
-function lockCoreAndSpawn(game: Game, piece: Piece): Game {
-  const merged = [...game.settled, ...piece.cubes];
-  const previous = coreStats(game.settled);
-  const stats = coreStats(merged);
-  const compactnessGain = Math.max(0, stats.density - previous.density);
-  const spawned = spawnCorePiece(game.next.shapeIndex, merged, game.spawnCursor);
-  return {
-    ...game,
-    settled: merged,
-    active: spawned?.piece ?? game.active,
-    next: makeTemplatePiece(randomShapeIndex()),
-    score: game.score + 50 + Math.round(stats.density * 350 + compactnessGain * 2000),
-    radius: stats.radius,
-    density: stats.density,
-    pieces: game.pieces + 1,
-    spawnCursor: (spawned?.directionIndex ?? game.spawnCursor) + 7,
-    gameOver: !spawned,
-  };
-}
-
-function advanceGame(game: Game): Game {
-  if (game.paused || game.gameOver) return game;
-  if (isBoundedMode(game.mode)) {
-    const moved = translatePiece(game.active, { x: 0, y: -1, z: 0 });
-    return isValidTower(moved.cubes, game.settled, boardSizeForMode(game.mode)) ? { ...game, active: moved } : lockTowerAndSpawn(game, game.active);
-  }
-  const moved = radialStep(game.active, game.settled);
-  return moved ? { ...game, active: moved } : lockCoreAndSpawn(game, game.active);
-}
-
-function shade(hex: string, amount: number) {
-  const value = parseInt(hex.slice(1), 16);
-  const channel = (shift: number) => clamp(((value >> shift) & 255) + amount, 0, 255);
-  return `rgb(${channel(16)}, ${channel(8)}, ${channel(0)})`;
-}
+const idleJoystick = (): Record<JoystickName, JoystickVector> => ({ move: { x: 0, y: 0 }, action: { x: 0, y: 0 } });
 
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [game, setGame] = useState<Game>(() => initialGame());
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [game, setGame] = useState<GameState>(() => ({ ...initialGame(), paused: true }));
   const gameRef = useRef(game);
+  const [menu, setMenu] = useState<"welcome" | "new" | "help" | null>("welcome");
+  const [chosenMode, setChosenMode] = useState<Mode>("tower");
+  const [chosenPace, setChosenPace] = useState<Pace>("relaxed");
+  const [fixedView, setFixedView] = useState("3D");
+  const [best, setBest] = useState(0);
+  const boardHelpId = "board-help";
   const [motionStatus, setMotionStatus] = useState<MotionStatus>("starting");
   const [viewMode, setViewMode] = useState<ViewMode>("orbit");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -473,6 +52,27 @@ export default function Game() {
 
   useEffect(() => { gameRef.current = game; }, [game]);
 
+  // Keep keyboard focus in the currently open game dialog, then restore it.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const buttons = () => Array.from(dialog.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+    buttons()[0]?.focus({ preventScroll: true });
+    const onDialogKey = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const items = buttons();
+      const current = items.indexOf(document.activeElement as HTMLButtonElement);
+      if (event.shiftKey && current <= 0) { event.preventDefault(); items.at(-1)?.focus(); }
+      else if (!event.shiftKey && (current === items.length - 1 || current < 0)) { event.preventDefault(); items[0]?.focus(); }
+    };
+    document.addEventListener("keydown", onDialogKey);
+    return () => {
+      document.removeEventListener("keydown", onDialogKey);
+      if (previous?.isConnected && !previous.closest(".overlay")) previous.focus({ preventScroll: true });
+    };
+  }, [menu, game.paused, game.gameOver]);
+
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       try {
@@ -493,7 +93,7 @@ export default function Game() {
 
   useEffect(() => {
     if (!settingsReady.current) return;
-    localStorage.setItem("3d-blocks-motion", JSON.stringify({ viewMode, multiplier, smoothing }));
+    try { localStorage.setItem("3d-blocks-motion", JSON.stringify({ viewMode, multiplier, smoothing })); } catch { /* Play still works when storage is blocked. */ }
   }, [multiplier, smoothing, viewMode]);
 
   useEffect(() => {
@@ -502,11 +102,7 @@ export default function Game() {
         setMotionStatus("unsupported");
         return;
       }
-      type PermissionOrientationEvent = typeof DeviceOrientationEvent & {
-        requestPermission?: () => Promise<"granted" | "denied">;
-      };
-      const OrientationEvent = DeviceOrientationEvent as PermissionOrientationEvent;
-      setMotionStatus(OrientationEvent.requestPermission ? "starting" : "active");
+      setMotionStatus("starting");
     });
     return () => cancelAnimationFrame(frame);
   }, []);
@@ -602,56 +198,18 @@ export default function Game() {
     });
   }, []);
 
-  const hardDrop = useCallback(() => {
-    setGame((current) => {
-      if (current.paused || current.gameOver) return current;
-      if (isBoundedMode(current.mode)) {
-        let piece = current.active;
-        let moved = translatePiece(piece, { x: 0, y: -1, z: 0 });
-        while (isValidTower(moved.cubes, current.settled, boardSizeForMode(current.mode))) {
-          piece = moved;
-          moved = translatePiece(piece, { x: 0, y: -1, z: 0 });
-        }
-        return lockTowerAndSpawn(current, piece);
-      }
-      let piece = current.active;
-      for (let step = 0; step < 2000; step += 1) {
-        const moved = radialStep(piece, current.settled);
-        if (!moved) return lockCoreAndSpawn(current, piece);
-        piece = moved;
-      }
-      return current;
-    });
-  }, []);
+  const hardDrop = useCallback(() => { setGame(dropGame); }, []);
+  const undo = useCallback(() => setGame(undoGame), []);
 
   const moveFromScreenVector = useCallback((screenX: number, screenY: number) => {
     const current = gameRef.current;
     if (current.paused || current.gameOver) return;
-    const directions = current.mode === "core"
-      ? [
-          { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
-          { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 },
-          { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 },
-        ]
-      : [
-          { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
-          { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 },
-        ];
-    const gestureLength = Math.hypot(screenX, screenY) || 1;
-    const best = directions
-      .map((direction) => {
-        const projected = projectDirection(direction, camera.current);
-        const axisLength = Math.hypot(projected.x, projected.y) || 1;
-        return {
-          direction,
-          score: (screenX * projected.x + screenY * projected.y) / (gestureLength * axisLength),
-        };
-      })
-      .sort((a, b) => b.score - a.score)[0];
-    move(best.direction.x, best.direction.y, best.direction.z);
+    const direction = screenMove(screenX, screenY, camera.current, current.mode);
+    move(direction.x, direction.y, direction.z);
   }, [move]);
 
   const rotateFromCamera = useCallback((direction: 1 | -1 = 1) => {
+    if (gameRef.current.mode !== "core") { rotatePiece("y", direction); return; }
     const axes: Array<{ axis: Axis; vector: Vector }> = [
       { axis: "x", vector: { x: 1, y: 0, z: 0 } },
       { axis: "y", vector: { x: 0, y: 1, z: 0 } },
@@ -696,7 +254,6 @@ export default function Game() {
 
   const startJoystick = useCallback((name: JoystickName, event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    void enableMotion();
     event.currentTarget.setPointerCapture(event.pointerId);
     joystickPointers.current[name] = event.pointerId;
     joystickTicks.current[name] = 0;
@@ -707,7 +264,7 @@ export default function Game() {
       joystickTicks.current[name] += 1;
       actOnJoystick(name, joystickVectors.current[name]);
     }, 115);
-  }, [actOnJoystick, enableMotion, updateJoystick]);
+  }, [actOnJoystick, updateJoystick]);
 
   const moveJoystick = useCallback((name: JoystickName, event: React.PointerEvent<HTMLButtonElement>) => {
     if (joystickPointers.current[name] !== event.pointerId) return;
@@ -748,7 +305,6 @@ export default function Game() {
 
   const onPointerDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
-    void enableMotion();
     event.currentTarget.setPointerCapture(event.pointerId);
     gesture.current = {
       pointerId: event.pointerId,
@@ -759,7 +315,7 @@ export default function Game() {
       distance: 0,
       startedAt: performance.now(),
     };
-  }, [enableMotion]);
+  }, []);
 
   const onPointerMove = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     const current = gesture.current;
@@ -781,30 +337,81 @@ export default function Game() {
     gesture.current = null;
     if (cancelled || current.distance >= 14) return;
     if (performance.now() - current.startedAt >= 520) hardDrop();
-    else rotateFromCamera();
-  }, [hardDrop, rotateFromCamera]);
+    else rotatePiece("y");
+  }, [hardDrop, rotatePiece]);
 
+  const interval = fallInterval(game);
   useEffect(() => {
-    const timer = window.setInterval(() => setGame(advanceGame), 780);
+    if (interval === null || game.paused || game.gameOver) return;
+    const timer = window.setInterval(() => setGame(advanceGame), interval);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [interval, game.paused, game.gameOver, game.pieces]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (menu) {
+        if (event.key === "Escape" && menu !== "welcome") { setMenu(null); setGame((current) => ({ ...current, paused: false })); }
+        return;
+      }
+      if (target.matches("input, select, textarea") || target.isContentEditable) return;
+      const key = event.key.toLowerCase();
+      if (key === "p" || key === "escape") {
+        event.preventDefault();
+        if (!event.repeat) setGame((current) => (current.gameOver ? current : { ...current, paused: !current.paused }));
+        return;
+      }
+      // Let focused buttons keep their native Space/Enter activation.
+      if (target.closest("button") && (event.code === "Space" || key === "enter")) return;
       if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"].includes(event.code)) event.preventDefault();
-      if (event.key === "ArrowLeft") move(-1, 0, 0);
-      if (event.key === "ArrowRight") move(1, 0, 0);
-      if (event.key === "ArrowUp") move(0, 0, -1);
-      if (event.key === "ArrowDown") move(0, 0, 1);
-      if (event.key.toLowerCase() === "q") move(0, -1, 0);
-      if (event.key.toLowerCase() === "e") move(0, 1, 0);
-      if (["x", "y", "z"].includes(event.key.toLowerCase())) rotatePiece(event.key.toLowerCase() as Axis);
-      if (event.key.toLowerCase() === "r") rotatePiece("y");
+      if (event.key === "ArrowLeft" || key === "a") moveFromScreenVector(-1, 0);
+      if (event.key === "ArrowRight" || key === "d") moveFromScreenVector(1, 0);
+      if (event.key === "ArrowUp" || key === "w") moveFromScreenVector(0, -1);
+      if (event.key === "ArrowDown" || key === "s") moveFromScreenVector(0, 1);
+      if (event.repeat) return;
+      if (key === "r") rotatePiece("y");
+      if (["x", "y", "z"].includes(key)) rotatePiece(key as Axis);
+      if (key === "q") move(0, -1, 0);
+      if (key === "e") move(0, 1, 0);
+      if (key === "u") undo();
       if (event.code === "Space") hardDrop();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [hardDrop, move, rotatePiece]);
+  }, [hardDrop, move, moveFromScreenVector, rotatePiece, undo, menu]);
+
+  useEffect(() => {
+    const pauseAway = () => {
+      if (document.hidden) setGame((current) => (current.gameOver ? current : { ...current, paused: true }));
+    };
+    const onBlur = () => {
+      setGame((current) => (current.gameOver ? current : { ...current, paused: true }));
+      gesture.current = null;
+      (Object.keys(joystickPointers.current) as JoystickName[]).forEach((name) => {
+        const pointer = joystickPointers.current[name];
+        if (pointer !== null) stopJoystick(name, pointer);
+      });
+    };
+    document.addEventListener("visibilitychange", pauseAway);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      document.removeEventListener("visibilitychange", pauseAway);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [stopJoystick]);
+
+  useEffect(() => {
+    const key = `3d-blocks-best-${game.mode}-${game.pace}`;
+    const frame = requestAnimationFrame(() => {
+      try {
+        const stored = Number(localStorage.getItem(key));
+        const value = Math.max(game.score, Number.isFinite(stored) ? stored : 0);
+        setBest(value);
+        localStorage.setItem(key, String(value));
+      } catch { setBest(game.score); }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [game.score, game.mode, game.pace]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -828,20 +435,27 @@ export default function Game() {
       const height = rect.height;
       context.clearRect(0, 0, width, height);
 
+      const landing = landingPiece(current);
+      // With no falling timer, hover the piece near its landing position so
+      // the useful part of the board can occupy more of a small screen.
+      const relaxedFloor = current.pace === "relaxed" && isBoundedMode(current.mode);
+      const hoverOffset = relaxedFloor ? Math.min(...landing.cubes.map(cube => cube.y)) + 3 - Math.min(...current.active.cubes.map(cube => cube.y)) : 0;
+      const displayedActive = current.active.cubes.map(cube => ({ ...cube, y: cube.y + hoverOffset }));
+      const viewHeight = relaxedFloor ? Math.max(5, ...current.settled.map(cube => cube.y + 2), ...displayedActive.map(cube => cube.y + 2)) : HEIGHT;
       const motion = camera.current;
-      motion.orientation = quaternionSlerp(motion.orientation, motion.targetOrientation, smoothing);
+      motion.orientation = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? motion.targetOrientation : quaternionSlerp(motion.orientation, motion.targetOrientation, smoothing);
       const activeRadius = Math.sqrt(Math.max(...current.active.cubes.map(distanceSquared), 0));
       const boardSize = boardSizeForMode(current.mode);
-      const sceneRadius = current.mode === "core" ? Math.max(4, current.radius + 1.5, activeRadius + 1) : Math.max(boardSize, HEIGHT) * 0.72;
+      const sceneRadius = current.mode === "core" ? Math.max(4, current.radius + 1.5, activeRadius + 1) : Math.max(boardSize, viewHeight) * 0.72;
       const scale = current.mode === "core"
         ? Math.min(width, height) / (sceneRadius * 2.15)
-        : Math.min(width / (boardSize * 1.62), height / (HEIGHT * 1.45));
+        : Math.min(width / (boardSize * 1.62), height / (viewHeight * 1.45));
       const centerY = current.mode === "core" ? height * 0.5 : height * 0.53;
       const worldToView = quaternionConjugate(motion.orientation);
 
       const project = (x: number, y: number, z: number): Projected => {
         const centeredX = current.mode === "core" ? x : x - boardSize / 2;
-        const centeredY = current.mode === "core" ? y : y - HEIGHT / 2;
+        const centeredY = current.mode === "core" ? y : y - viewHeight / 2;
         const centeredZ = current.mode === "core" ? z : z - boardSize / 2;
         const view = quaternionRotateVector(worldToView, { x: centeredX, y: centeredY, z: centeredZ });
         const perspectiveDistance = Math.max(12, sceneRadius * 4);
@@ -851,7 +465,7 @@ export default function Game() {
 
       context.lineWidth = 1;
       if (isBoundedMode(current.mode)) {
-        context.strokeStyle = "rgba(255,255,255,.10)";
+        context.strokeStyle = "rgba(188,207,238,.27)";
         for (let i = 0; i <= boardSize; i += 1) {
           const a = project(i, 0, 0);
           const b = project(i, 0, boardSize);
@@ -859,6 +473,12 @@ export default function Game() {
           const d = project(boardSize, 0, i);
           context.beginPath(); context.moveTo(a.x, a.y); context.lineTo(b.x, b.y); context.stroke();
           context.beginPath(); context.moveTo(c.x, c.y); context.lineTo(d.x, d.y); context.stroke();
+        }
+        context.strokeStyle = "rgba(188,207,238,.13)";
+        for (const [x, z] of [[0, 0], [0, boardSize], [boardSize, 0], [boardSize, boardSize]]) {
+          const bottom = project(x, 0, z);
+          const top = project(x, viewHeight, z);
+          context.beginPath(); context.moveTo(bottom.x, bottom.y); context.lineTo(top.x, top.y); context.stroke();
         }
       } else {
         const guideRadius = Math.max(2.25, current.radius + 1.35);
@@ -896,7 +516,7 @@ export default function Game() {
         context.beginPath(); context.arc(core.x, core.y, 24, 0, Math.PI * 2); context.fill();
       }
 
-      const faces: Face[] = [];
+      const faces: (Face & { active: boolean })[] = [];
       const faceDefs = [
         { corners: [[0,0,0],[1,0,0],[1,1,0],[0,1,0]], shade: -24 },
         { corners: [[0,0,1],[0,1,1],[1,1,1],[1,0,1]], shade: -10 },
@@ -906,13 +526,14 @@ export default function Game() {
         { corners: [[0,0,0],[0,0,1],[1,0,1],[1,0,0]], shade: -40 },
       ] as const;
       const cubeOffset = current.mode === "core" ? -0.5 : 0;
-      [...current.settled, ...current.active.cubes].forEach((cube) => {
+      [...current.settled, ...displayedActive].forEach((cube) => {
         faceDefs.forEach((face) => {
           const points = face.corners.map(([x, y, z]) => project(cube.x + x + cubeOffset, cube.y + y + cubeOffset, cube.z + z + cubeOffset));
           faces.push({
             points,
             depth: points.reduce((sum, point) => sum + point.depth, 0) / points.length,
             color: shade(cube.color, face.shade),
+            active: displayedActive.includes(cube),
           });
         });
       });
@@ -922,9 +543,27 @@ export default function Game() {
         context.closePath();
         context.fillStyle = face.color;
         context.fill();
-        context.strokeStyle = "rgba(255,255,255,.24)";
+        context.lineWidth = face.active ? 1.8 : 0.7;
+        context.strokeStyle = face.active ? "rgba(255,255,255,.85)" : "rgba(255,255,255,.19)";
         context.stroke();
       });
+
+      // The exact same landing calculation is used by Drop and its preview.
+      if (!current.gameOver) {
+        context.save();
+        context.lineWidth = 2;
+        context.setLineDash([4, 3]);
+        context.strokeStyle = "#e2ff81";
+        context.fillStyle = "rgba(215,255,86,.18)";
+        landing.cubes.forEach((cube) => {
+          const points = [[0, 1.025, 0], [1, 1.025, 0], [1, 1.025, 1], [0, 1.025, 1]]
+            .map(([x, y, z]) => project(cube.x + x + cubeOffset, cube.y + y + cubeOffset, cube.z + z + cubeOffset));
+          context.beginPath();
+          points.forEach((point, index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y));
+          context.closePath(); context.fill(); context.stroke();
+        });
+        context.restore();
+      }
 
       frame = requestAnimationFrame(draw);
     };
@@ -932,140 +571,166 @@ export default function Game() {
     return () => cancelAnimationFrame(frame);
   }, [smoothing]);
 
-  const togglePause = () => setGame((current) => ({ ...current, paused: !current.paused }));
-  const restart = () => setGame((current) => initialGame(current.mode));
-  const selectMode = (mode: Mode) => setGame(initialGame(mode));
-  const level = Math.floor(game.layers / 3) + 1;
-  const motionTitle = motionStatus === "active"
-    ? (viewMode === "orbit" ? "ORBIT ACTIVE" : "SPATIAL ACTIVE")
-    : "TILT CAMERA";
-  const motionSubtitle = motionStatus === "active"
-    ? (viewMode === "orbit" ? "Tilt between front, top, and side" : "1:1 full-sphere orientation")
-    : "Enable motion to steer the view";
-
-  const modeSubtitle = game.mode === "core" ? "RADIAL CORE" : game.mode === "patch" ? "9×9 PATCH GRID" : "MOTION TOWER";
-  const clearLabel = game.mode === "patch" ? "PATCHES" : "LAYERS";
+  const togglePause = () => setGame((current) => (current.gameOver ? current : { ...current, paused: !current.paused }));
+  const openMenu = (next: "new" | "help") => {
+    setChosenMode(game.mode);
+    setChosenPace(game.pace);
+    setGame((current) => (current.gameOver ? current : { ...current, paused: true }));
+    setMenu(next);
+  };
+  const chooseView = (name: string) => {
+    setFixedView(name);
+    if (motionStatus === "active") setMotionStatus("starting");
+    const angles: Record<string, [number, number]> = { "3D": [DEFAULT_PITCH, -DEFAULT_YAW], Top: [HALF_PI, 0], Front: [0, 0], Side: [0, HALF_PI] };
+    const [pitch, yaw] = angles[name];
+    const orientation = quaternionConjugate(quaternionMultiply(quaternionFromAxisAngle("x", pitch), quaternionFromAxisAngle("y", yaw)));
+    camera.current.targetOrientation = orientation;
+  };
+  const startRound = () => {
+    setGame(initialGame(chosenMode, chosenPace));
+    setMenu(null);
+    chooseView("3D");
+  };
+  const continueGame = () => { setMenu(null); setGame((current) => ({ ...current, paused: false })); };
+  const controlsDisabled = game.paused || game.gameOver;
+  const firstPuzzle = game.mode === "tower" && game.pace === "relaxed" && game.pieces === 0;
+  const clearLabel = game.mode === "patch" ? "patches" : "layers";
+  const goal = game.mode === "core" ? "Pack blocks around the glowing center." : game.mode === "patch" ? "Fill any 3 × 3 square to clear it." : "Fill a whole floor to clear a layer.";
+  const stepText = firstPuzzle ? "Aim for the gap. Undo is here if you miss." : game.pace === "relaxed" ? "Take your time. The block waits for you." : "Blocks fall slowly. Find a spot before they land.";
 
   return (
     <main className={`game-shell ${game.mode === "core" ? "core-mode" : game.mode === "patch" ? "patch-mode" : ""}`}>
       <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">3D</span>
-          <div><strong>3D BLOCKS</strong><small>{modeSubtitle}</small></div>
+        <div className="brand"><span className="brand-mark">3D</span><h1>3D BLOCKS</h1></div>
+        <div className="header-actions">
+          <button onClick={() => openMenu("help")} disabled={menu !== null} aria-label="How to play">?</button>
+          <button onClick={togglePause} disabled={menu !== null || game.gameOver} aria-label={game.paused ? "Resume" : "Pause"}>{game.paused ? "▶" : "Ⅱ"}</button>
         </div>
-        <button className="icon-btn" onClick={togglePause} aria-label={game.paused ? "Resume" : "Pause"}>{game.paused ? "▶" : "Ⅱ"}</button>
       </header>
+      <div className="round-bar"><span><i />{game.pace === "relaxed" ? "Relaxed" : "Challenge"} · {game.mode === "tower" ? "Tower" : game.mode === "patch" ? "Patch" : "Core"}</span><button onClick={() => openMenu("new")} disabled={menu !== null}>New game</button></div>
 
-      <nav className="mode-switch game-mode-switch" aria-label="Game mode">
-        <button className={game.mode === "tower" ? "active" : ""} onClick={() => selectMode("tower")}><b>↓</b><span>TOWER<small>ONE-WAY GRAVITY</small></span></button>
-        <button className={game.mode === "patch" ? "active" : ""} onClick={() => selectMode("patch")}><b>▦</b><span>PATCH<small>9×9 · CLEAR 3×3</small></span></button>
-        <button className={game.mode === "core" ? "active" : ""} onClick={() => selectMode("core")}><b>◎</b><span>CORE<small>360° GRAVITY</small></span></button>
-      </nav>
-
-      <nav className="mode-switch" aria-label="View mode">
-        <button className={viewMode === "orbit" ? "active" : ""} onClick={() => selectViewMode("orbit")}><b>↻</b><span>ORBIT<small>FRONT · TOP · SIDE</small></span></button>
-        <button className={viewMode === "spatial" ? "active" : ""} onClick={() => selectViewMode("spatial")}><b>◉</b><span>SPATIAL<small>FULL-SPHERE 1:1 VIEW</small></span></button>
-      </nav>
-
-      <section className="motion-bar" aria-label="Motion camera controls">
-        <div className="motion-copy">
-          <span className={`status-dot ${motionStatus}`} />
-          <div><strong>{motionTitle}</strong><small>{motionSubtitle}</small></div>
-        </div>
-        {motionStatus === "active"
-          ? <button onClick={recenter}>RECENTER</button>
-          : <button onClick={enableMotion}>{motionStatus === "denied" ? "TRY AGAIN" : "ENABLE"}</button>}
-        <button className="settings-toggle" onClick={() => setSettingsOpen((open) => !open)} aria-expanded={settingsOpen} aria-label="Motion settings">⚙</button>
-      </section>
-
-      {settingsOpen && (
-        <section className="motion-settings" aria-label="Motion sensitivity settings">
-          <label>
-            <span>Orbit multiplier <b>{multiplier.toFixed(1)}×</b></span>
-            <input type="range" min="0.2" max="5" step="0.1" value={multiplier} disabled={viewMode === "spatial"} onChange={(event) => setMultiplier(Number(event.target.value))} />
-          </label>
-          <label><span>Smoothing <b>{Math.round(smoothing * 100)}%</b></span><input type="range" min="0.06" max="0.42" step="0.02" value={smoothing} onChange={(event) => setSmoothing(Number(event.target.value))} /></label>
-          {viewMode === "spatial" && <p>Spatial view is 1:1. The multiplier applies only to Orbit.</p>}
-          {(motionStatus === "unsupported" || motionStatus === "denied") && <p>{motionStatus === "unsupported" ? "Motion sensors are unavailable here. The game still works with a fixed view." : "Motion access was blocked. Allow motion access in your browser settings, then try again."}</p>}
-        </section>
-      )}
-
-      <section className="game-card">
-        {game.mode === "core" && <div className="core-brief"><i /> <span><strong>PACK THE CORE</strong><small>Every piece seeks point zero. Keep the radius small and the density high.</small></span></div>}
-        {game.mode === "patch" && <div className="patch-brief"><i /> <span><strong>BUILD A 3×3 PATCH</strong><small>Any filled 3×3 square clears. Columns fall and can trigger chain clears.</small></span></div>}
+      <section className="game-card" aria-label="Game">
         <div className="score-row">
-          <div><small>SCORE</small><strong>{game.score.toLocaleString()}</strong></div>
-          {game.mode === "core" ? (
-            <><div><small>RADIUS</small><strong>{game.radius.toFixed(1)}</strong></div><div><small>DENSITY</small><strong>{Math.round(game.density * 100)}%</strong></div></>
-          ) : (
-            <><div><small>LEVEL</small><strong>{level}</strong></div><div><small>{clearLabel}</small><strong>{game.layers}</strong></div></>
-          )}
+          <div><small>Score</small><strong>{game.score.toLocaleString()}</strong></div>
+          <div><small>{game.mode === "core" ? "Packed" : "Cleared"}</small><strong>{game.mode === "core" ? game.pieces : game.layers}<em> {game.mode === "core" ? (game.pieces === 1 ? "piece" : "pieces") : (game.layers === 1 ? clearLabel.slice(0, -1) : clearLabel)}</em></strong></div>
+          <div className="next-block"><small>Next</small><NextPiece piece={game.next} /></div>
         </div>
-
         <div className="play-stage">
-          <div className="tablet-stick move-stick">
-            <strong>MOVE</strong>
-            <button
-              type="button"
-              aria-label="Move the active piece relative to the view"
-              onPointerDown={(event) => startJoystick("move", event)}
-              onPointerMove={(event) => moveJoystick("move", event)}
-              onPointerUp={(event) => stopJoystick("move", event.pointerId)}
-              onPointerCancel={(event) => stopJoystick("move", event.pointerId)}
-              onKeyDown={(event) => onJoystickKeyDown("move", event)}
-            >
+          <div className="tablet-stick move-stick"><strong>Move</strong>
+            <button type="button" disabled={controlsDisabled} aria-label="Move the active piece relative to the view"
+              onPointerDown={(event) => startJoystick("move", event)} onPointerMove={(event) => moveJoystick("move", event)}
+              onPointerUp={(event) => stopJoystick("move", event.pointerId)} onPointerCancel={(event) => stopJoystick("move", event.pointerId)}
+              onLostPointerCapture={(event) => stopJoystick("move", event.pointerId)} onKeyDown={(event) => onJoystickKeyDown("move", event)}>
               <i style={{ transform: `translate(-50%, -50%) translate(${joystickPosition.move.x * 34}px, ${joystickPosition.move.y * 34}px)` }} />
-            </button>
-            <small>IN VIEW</small>
+            </button><small>Follow the view</small>
           </div>
-          <div className="canvas-wrap">
-          <canvas
-            ref={canvasRef}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={(event) => finishGesture(event)}
-            onPointerCancel={(event) => finishGesture(event, true)}
-            aria-label={game.mode === "core" ? "Radial 3D Blocks core. Swipe to move, tap to rotate, and hold to pull the active piece toward the center." : game.mode === "patch" ? "9 by 9 patch grid. Fill any 3 by 3 square to clear it. Swipe to move, tap to rotate, and hold to drop the active piece." : "3D Blocks tower. Swipe to move, tap to rotate, and hold to drop the active piece. Camera orientation follows the selected motion view."}
-            aria-describedby="gesture-help"
-          />
-          <div className="axis-chip">{game.mode === "core" ? `CORE · ${viewMode.toUpperCase()}` : game.mode === "patch" ? `9×9 · ${viewMode.toUpperCase()}` : `${viewMode.toUpperCase()} VIEW`}</div>
-          <div className="gesture-help" id="gesture-help"><span>SWIPE</span> MOVE <i /> <span>TAP</span> ROTATE <i /> <span>HOLD</span> {game.mode === "core" ? "PULL" : "DROP"}</div>
-          {(game.paused || game.gameOver) && (
-            <div className="overlay">
-              <strong>{game.gameOver ? (game.mode === "core" ? "CORE SEALED" : "TOWER FULL") : "PAUSED"}</strong>
-              <button onClick={game.gameOver ? restart : togglePause}>{game.gameOver ? "PLAY AGAIN" : "CONTINUE"}</button>
+          <div className={`canvas-wrap ${game.layers > 0 && game.message.includes("!") ? "has-clear" : ""}`}>
+            <canvas ref={canvasRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove}
+              onPointerUp={(event) => finishGesture(event)} onPointerCancel={(event) => finishGesture(event, true)}
+              onLostPointerCapture={(event) => finishGesture(event, true)}
+              aria-label="3D Blocks play area. Drag to move, tap to turn. The green outline shows where the block will land."
+              aria-describedby={boardHelpId} />
+            <span className="landing-key"><i /> Landing spot</span>
+            <div className="board-message" key={`${game.mode}-${game.pieces}-${game.layers}`} role="status" aria-live="polite">
+              <strong>{game.pieces === 0 ? goal : game.message}</strong><span>{stepText}</span>
             </div>
-          )}
+            {(menu || game.paused || game.gameOver) && (
+              <div ref={dialogRef} className="overlay" role="dialog" aria-modal="true" aria-label={menu === "welcome" ? "Welcome to 3D Blocks" : menu === "new" ? "New game" : menu === "help" ? "How to play" : game.gameOver ? "Round finished" : "Paused"}>
+                {menu === "welcome" ? <>
+                  <span className="eyebrow">A little puzzle. A little victory.</span>
+                  <h2>One block.<br />Your first clear.</h2>
+                  <p>We left a gap for you. Fit the bright block into it and watch the floor disappear.</p>
+                  <span className="calm-note">No timer. You can undo a move.</span>
+                  <button className="primary" onClick={startRound}>Let’s play <span>→</span></button>
+                  <button className="text-button" onClick={() => setMenu("new")}>Choose a different mode</button>
+                </> : menu === "new" ? <>
+                  <h2>Make it your game.</h2>
+                  <fieldset><legend>Pace</legend><div className="choice-row">
+                    <button aria-pressed={chosenPace === "relaxed"} onClick={() => setChosenPace("relaxed")}><strong>Relaxed</strong><small>No timer · Undo</small></button>
+                    <button aria-pressed={chosenPace === "challenge"} onClick={() => setChosenPace("challenge")}><strong>Challenge</strong><small>Falling blocks</small></button>
+                  </div></fieldset>
+                  <fieldset><legend>Playground</legend><div className="choice-row modes">
+                    <button aria-pressed={chosenMode === "tower"} onClick={() => setChosenMode("tower")}><strong>Tower</strong><small>Fill a floor</small></button>
+                    <button aria-pressed={chosenMode === "patch"} onClick={() => setChosenMode("patch")}><strong>Patch</strong><small>Clear 3 × 3</small></button>
+                    <button aria-pressed={chosenMode === "core"} onClick={() => setChosenMode("core")}><strong>Core</strong><small>Pack a sphere</small></button>
+                  </div></fieldset>
+                  <button className="primary" onClick={startRound}>Start new game →</button>
+                  <button className="text-button" onClick={continueGame}>Back to this game</button>
+                </> : menu === "help" ? <>
+                  <h2>Aim. Turn. Drop.</h2><p>{goal}</p>
+                  <ol><li>Move with the arrows or drag the block.</li><li>Turn it to fit. Green outlines show its landing spot.</li><li>Press <b>Drop</b> when you’re happy.</li></ol>
+                  <p className="keyboard-guide">Keyboard: arrows / WASD move · R turns · Space drops · U undoes · P pauses. X / Y / Z tumble.</p>
+                  <button className="primary" onClick={continueGame}>Got it. Let’s play →</button>
+                </> : game.gameOver ? <>
+                  <span className="eyebrow">Nice playing!</span><h2>Room for another try.</h2>
+                  <p>{game.score.toLocaleString()} points · {game.mode === "core" ? `${game.pieces} pieces packed` : `${game.layers} ${clearLabel} cleared`}</p>
+                  {game.pace === "relaxed" && game.undo && <button className="primary" onClick={undo}>Undo the last block ↶</button>}
+                  <button className={game.pace === "relaxed" && game.undo ? "text-button" : "primary"} onClick={startRound}>Play again →</button>
+                </> : <><span className="eyebrow">Take a breather</span><h2>We’ll wait here.</h2><button className="primary" onClick={togglePause}>Keep playing →</button></>}
+              </div>
+            )}
           </div>
-          <div className="tablet-stick action-stick">
-            <strong>TURN</strong>
-            <button
-              type="button"
-              aria-label="Turn the active piece left or right, or move it up and down"
-              onPointerDown={(event) => startJoystick("action", event)}
-              onPointerMove={(event) => moveJoystick("action", event)}
-              onPointerUp={(event) => stopJoystick("action", event.pointerId)}
-              onPointerCancel={(event) => stopJoystick("action", event.pointerId)}
-              onKeyDown={(event) => onJoystickKeyDown("action", event)}
-            >
+          <div className="tablet-stick action-stick"><strong>Turn / Height</strong>
+            <button type="button" disabled={controlsDisabled} aria-label="Turn the active piece left or right, or move it up and down"
+              onPointerDown={(event) => startJoystick("action", event)} onPointerMove={(event) => moveJoystick("action", event)}
+              onPointerUp={(event) => stopJoystick("action", event.pointerId)} onPointerCancel={(event) => stopJoystick("action", event.pointerId)}
+              onLostPointerCapture={(event) => stopJoystick("action", event.pointerId)} onKeyDown={(event) => onJoystickKeyDown("action", event)}>
               <i style={{ transform: `translate(-50%, -50%) translate(${joystickPosition.action.x * 34}px, ${joystickPosition.action.y * 34}px)` }} />
-            </button>
-            <small>HEIGHT</small>
+            </button><small>Push left or right</small>
+          </div>
+        </div>
+        <nav className="view-controls" aria-label="Camera view"><span>View</span>{["3D", "Top", "Front", "Side"].map((name) => <button key={name} disabled={menu !== null} aria-pressed={fixedView === name && motionStatus !== "active"} onClick={() => chooseView(name)}>{name}</button>)}</nav>
+        {game.mode === "core" && <p className="core-stats">Radius <b>{game.radius.toFixed(1)}</b> · Density <b>{Math.round(game.density * 100)}%</b></p>}
+        <div className="game-controls">
+          <div className="move-pad" aria-label="Move block">
+            <button className="move-up" disabled={controlsDisabled} aria-label="Move up in view" onClick={() => moveFromScreenVector(0, -1)}>↑</button>
+            <button className="move-left" disabled={controlsDisabled} aria-label="Move left in view" onClick={() => moveFromScreenVector(-1, 0)}>←</button>
+            <span aria-hidden="true">Move</span>
+            <button className="move-right" disabled={controlsDisabled} aria-label="Move right in view" onClick={() => moveFromScreenVector(1, 0)}>→</button>
+            <button className="move-down" disabled={controlsDisabled} aria-label="Move down in view" onClick={() => moveFromScreenVector(0, 1)}>↓</button>
+          </div>
+          <div className="action-pad">
+            <button disabled={controlsDisabled} onClick={() => rotatePiece("y")} aria-label="Turn block"><b>↻</b> Turn <kbd>R</kbd></button>
+            <button className="drop-button" disabled={controlsDisabled} onClick={hardDrop}><b>↓</b> {game.mode === "core" ? "Pull" : "Drop"} <kbd>Space</kbd></button>
+          </div>
+          <div className="secondary-controls">
+            {game.pace === "relaxed" && <button disabled={!game.undo || game.paused} onClick={undo}>↶ Undo <kbd>U</kbd></button>}
+            <button disabled={controlsDisabled} onClick={() => rotatePiece("x")}>Tumble ↗</button>
+            <span>Best here <b>{best.toLocaleString()}</b></span>
           </div>
         </div>
       </section>
-
-      <footer>
-        <span>NEXT</span>
-        <div className="next-piece" aria-hidden="true">{game.next.cubes.map((_, index) => <i key={index} style={{ background: game.next.color }} />)}</div>
-        {game.mode === "core" && <em>{game.pieces} PIECES PACKED</em>}
-        <button onClick={restart}>NEW GAME</button>
-      </footer>
-
-      <a className="wofi-badge" href="https://wofi.ai/ideas/sha256%3Ac472014b92b2e4c50702ad044544f964707a78157100c5e79ce161bc01eca510" target="_blank" rel="noreferrer" aria-label="View the Wofi Idea behind 3D Blocks">
-        <Image src="/wofi-logo.svg" width={22} height={22} alt="" />
-        <span>THIS IS A WOFI IDEA</span>
-      </a>
+      <p className="board-help" id={boardHelpId}>Drag to move · Tap to turn · Use Drop to place</p>
+      <details className="advanced" onToggle={(event) => { if (event.currentTarget.open) setGame((current) => (current.gameOver ? current : { ...current, paused: true })); }}>
+        <summary>Camera & motion settings</summary>
+        <div className="motion-bar"><div><strong>Tilt camera</strong><p>{motionStatus === "active" ? "Move your device to look around." : "Optional. The view stays still until you enable motion."}</p></div>
+          {motionStatus === "active" ? <><button onClick={() => { setMotionStatus("starting"); recenter(); }}>Turn off</button><button onClick={recenter}>Recenter</button></> : <button disabled={motionStatus === "unsupported"} onClick={enableMotion}>{motionStatus === "unsupported" ? "Unavailable" : "Enable tilt"}</button>}
+        </div>
+        <div className="choice-row"><button aria-pressed={viewMode === "orbit"} onClick={() => selectViewMode("orbit")}>Orbit · front / top / side</button><button aria-pressed={viewMode === "spatial"} onClick={() => selectViewMode("spatial")}>Spatial · full sphere</button></div>
+        <button className="text-button" onClick={() => setSettingsOpen((open) => !open)} aria-expanded={settingsOpen}>Sensitivity</button>
+        {settingsOpen && <div className="motion-settings">
+          <label>Orbit multiplier <b>{multiplier.toFixed(1)}×</b><input type="range" min="0.2" max="5" step="0.1" value={multiplier} disabled={viewMode === "spatial"} onChange={(event) => setMultiplier(Number(event.target.value))} /></label>
+          <label>Smoothing <b>{Math.round(smoothing * 100)}%</b><input type="range" min="0.06" max="0.42" step="0.02" value={smoothing} onChange={(event) => setSmoothing(Number(event.target.value))} /></label>
+          {motionStatus === "denied" && <p>Motion access was blocked. You can still use all four view buttons.</p>}
+        </div>}
+      </details>
+      <a className="wofi-badge" href="https://wofi.ai/ideas/sha256%3Ac472014b92b2e4c50702ad044544f964707a78157100c5e79ce161bc01eca510" target="_blank" rel="noreferrer" aria-label="View the Wofi Idea behind 3D Blocks"><Image src="/wofi-logo.svg" width={22} height={22} alt="" /><span>THIS IS A WOFI IDEA</span></a>
     </main>
   );
+}
+
+function NextPiece({ piece }: { piece: Piece }) {
+  const minX = Math.min(...piece.cubes.map((cube) => cube.x));
+  const minY = Math.min(...piece.cubes.map((cube) => cube.y));
+  const minZ = Math.min(...piece.cubes.map((cube) => cube.z));
+  const cubes = piece.cubes.map((cube) => ({ x: cube.x - minX, y: cube.y - minY, z: cube.z - minZ }));
+  const project = (x: number, y: number, z: number) => [(x - z) * 12, (x + z) * 6 - y * 13];
+  const faces = [ [[0,1,0],[1,1,0],[1,1,1],[0,1,1]], [[0,0,1],[0,1,1],[1,1,1],[1,0,1]], [[1,0,0],[1,0,1],[1,1,1],[1,1,0]] ];
+  const polygons = cubes.sort((a, b) => (a.x + a.z) - (b.x + b.z) || a.y - b.y).flatMap((cube) => faces.map((corners, index) => ({ points: corners.map(([x,y,z]) => project(cube.x+x,cube.y+y,cube.z+z)), color: shade(piece.color, [25,-12,-30][index]) })));
+  const all = polygons.flatMap((face) => face.points);
+  const minPx = Math.min(...all.map(([x]) => x)) - 3;
+  const minPy = Math.min(...all.map(([,y]) => y)) - 3;
+  const width = Math.max(...all.map(([x]) => x)) - minPx + 3;
+  const height = Math.max(...all.map(([,y]) => y)) - minPy + 3;
+  return <svg role="img" aria-label={`Next piece: ${piece.cubes.length} cubes`} viewBox={`${minPx} ${minPy} ${width} ${height}`} data-shape={piece.shapeIndex}>{polygons.map((face, index) => <polygon key={index} points={face.points.map((point) => point.join(",")).join(" ")} fill={face.color} stroke="rgba(255,255,255,.5)" strokeWidth=".6" />)}</svg>;
 }

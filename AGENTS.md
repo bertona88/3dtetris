@@ -12,6 +12,10 @@ mode is implemented.
   columns, plus front/top/side projections, touch dragging, wall-kicked piece
   rotation, hard drop, scoring, layer clearing, pause/restart, a responsive
   mobile interface, and dual-thumb virtual controls on large touch screens.
+- The default Relaxed pace has no automatic gravity, simpler bounded-mode
+  pieces, a clearly introduced starter layer, exact landing preview, one-placement
+  undo, explicit controls and optional tilt. Challenge retains timed gravity.
+  Scores start at zero; best scores are device-local and separated by mode/pace.
 - Device-orientation camera control and radial-gravity spherical packing are
   implemented in the reconciled release. Keep claims limited to browser-tested
   behavior: orientation access still depends on device and browser permission.
